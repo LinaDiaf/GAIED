@@ -125,3 +125,30 @@ The recorded provenance data from the paper's run is included as `flowcept_buffe
 - Agents can receive insights and information learned by other agents that may be applicable.
 - The tool calling can be finicky depending on the LLM used --- incorrect formatting of tool calls led to poor performance during testing.
 - The `HybridExchangeClient` uses HPC interconnects to communicate between agents, and can accelerate agents when lots of data is communicated, or communication happens at a high frequency
+
+## Full provenance analyzer stack
+
+The deterministic verifier and live monitor are bundled in
+[`provenance_analytics/`](provenance_analytics/). To run the complete local
+GAIED + analyzer stack, copy `.env.example` to `.env`, configure the LLM
+endpoint and credentials, then run these commands from the repository root:
+
+```powershell
+Copy-Item .env.example .env
+notepad .env
+docker compose -f compose.gaied.yml up -d --build
+docker compose -f compose.gaied.yml logs -f gaied
+```
+
+Open `http://127.0.0.1:8765/` and use the campaign ID printed in the GAIED
+logs. See [the live run guide](provenance_analytics/docs/GAIED_LIVE_RUN.md)
+for runtime requirements and setup details. Run the analyzer tests with:
+
+```powershell
+python -m pip install -r provenance_analytics/requirements-dev.txt
+python -m pytest -q -p no:cacheprovider provenance_analytics/tests
+```
+
+The `.env` file and generated audit/output files are excluded from version
+control. The analyzer reports trace consistency; it does not independently
+validate scientific truth.

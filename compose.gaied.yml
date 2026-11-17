@@ -1,0 +1,70 @@
+services:
+  analyzer:
+    build:
+      context: ./provenance_analytics
+      dockerfile: Dockerfile.analyzer
+    ports:
+      - "127.0.0.1:8765:8765"
+    volumes:
+      - analyzer_data:/data
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8765/health', timeout=2).read()"
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  redis:
+    image: redis:7-alpine
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 2s
+      timeout: 2s
+      retries: 30
+
+  gaied:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    entrypoint:
+      - /bin/bash
+      - -lc
+      - micromamba run -n moldesign-demo python run-07.py
+    environment:
+      DB_FLUSH_MODE: offline
+      DUMP_BUFFER: "1"
+      INSTRUMENTATION_ENABLED: "true"
+      MQ_ENABLED: "false"
+      TELEMETRY_ENABLED: "false"
+      GAIED_REDIS_HOST: redis
+      GAIED_REDIS_PORT: "6379"
+      GAIED_MAX_ITERATIONS: ${GAIED_MAX_ITERATIONS:-2}
+      GAIED_XTB_WORKERS: ${GAIED_XTB_WORKERS:-1}
+      GAIED_REPORT_INTERVAL_SECONDS: ${GAIED_REPORT_INTERVAL_SECONDS:-10}
+      GAIED_REPORT_TIMEOUT_SECONDS: ${GAIED_REPORT_TIMEOUT_SECONDS:-60}
+      GAIED_LLM_MAX_TOKENS: ${GAIED_LLM_MAX_TOKENS:-32}
+      GAIED_LLM_TIMEOUT_SECONDS: ${GAIED_LLM_TIMEOUT_SECONDS:-600}
+      GAIED_MAX_RUNTIME_SECONDS: ${GAIED_MAX_RUNTIME_SECONDS:-1200}
+      GAIED_SEED: ${GAIED_SEED:-CNC(N)=O}
+      GAIED_REASONING_MODEL: ${GAIED_REASONING_MODEL:-gpt54}
+      GAIED_GENERATION_MODEL: ${GAIED_GENERATION_MODEL:-gpt54}
+      SOMEAPI_URL: ${SOMEAPI_URL:?Set SOMEAPI_URL to the configured LLM endpoint}
+      SOMEAPI_API_KEY: ${SOMEAPI_API_KEY:-}
+      SomeAPI_USER: ${SomeAPI_USER:-}
+      SOMEAPI_OPENAI_COMPATIBLE: ${SOMEAPI_OPENAI_COMPATIBLE:-0}
+      PROVENANCE_MONITOR_URL: http://analyzer:8765
+    volumes:
+      - ./run-07.py:/app/run-07.py:ro
+      - ./mol_design_agents.py:/app/mol_design_agents.py:ro
+      - ./realtime_bridge.py:/app/realtime_bridge.py:ro
+    depends_on:
+      analyzer:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+volumes:
+  analyzer_data:

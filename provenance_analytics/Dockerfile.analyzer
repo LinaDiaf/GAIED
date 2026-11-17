@@ -1,0 +1,10 @@
+FROM python:3.13-slim
+
+WORKDIR /app
+COPY requirements.txt ./
+RUN python -m pip install --no-cache-dir -r requirements.txt
+COPY main.py provenance.py knowledge_graph.py verification.py ./
+COPY realtime_monitor ./realtime_monitor
+
+EXPOSE 8765
+CMD ["python", "-m", "realtime_monitor.server", "--host", "0.0.0.0", "--port", "8765", "--db", "/data/gaied_realtime_audit.sqlite3"]

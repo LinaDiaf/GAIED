@@ -102,6 +102,10 @@ async def main() -> int:
         max_runtime = float(os.environ.get('GAIED_MAX_RUNTIME_SECONDS', '1200'))
         active: dict[int, tuple] = {i: (agent, -1) for i, agent in enumerate(agents)}
         agent_errors: list[int] = []
+        report_timeout = max(
+            1.0,
+            float(os.environ.get('GAIED_REPORT_TIMEOUT_SECONDS', '60')),
+        )
         try:
             while active:
                 await asyncio.sleep(max(5.0, float(os.environ.get('GAIED_REPORT_INTERVAL_SECONDS', '10'))))
@@ -109,8 +113,8 @@ async def main() -> int:
                 for i, (agent, last_count) in list(active.items()):
                     try:
                         status, report = await asyncio.gather(
-                            asyncio.wait_for(agent.campaign_status(), timeout=10.0),
-                            asyncio.wait_for(agent.report(), timeout=10.0),
+                            asyncio.wait_for(agent.campaign_status(), timeout=report_timeout),
+                            asyncio.wait_for(agent.report(), timeout=report_timeout),
                         )
                         count = len(report)
                         print(f'Progress report from agent {i}')

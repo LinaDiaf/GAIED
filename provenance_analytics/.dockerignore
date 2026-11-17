@@ -1,0 +1,12 @@
+.git
+.env
+.env.*
+.venv
+__pycache__
+.pytest_cache
+output
+tests
+docs
+gaied_upstream
+flowcept_buffer_SC.jsonl
+*.pyc
