@@ -1,11 +1,11 @@
 name: moldesign-demo
 channels:
-  - defaults
   - conda-forge
 dependencies:
 # Core dependencies
   - python==3.13
   - pip
+  - git
 
 # Dependencies from the molecular design app
   - rdkit

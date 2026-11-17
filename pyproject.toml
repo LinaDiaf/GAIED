@@ -9,11 +9,12 @@ authors = [
 requires-python = ">=3.11"
 dependencies = [
     "langchain>=1.0.0",
-    "flowcept @ git+https://anonymous.4open.science/r/flowcept-130C",
+    "flowcept>=1.0.3",
     "langchain-openai",
     "ase",
     "academy-py>=0.3.0",
     "parsl",
+    "requests>=2.31",
 ]
 
 [build-system]
