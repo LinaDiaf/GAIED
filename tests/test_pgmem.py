@@ -466,6 +466,24 @@ def test_analysis_without_the_memory_source_keeps_only_the_judgement():
     assert len(diagnoses(s)) == n and any(s.graph.outgoing(g.id, ["APPLIED_IN"]) for g in s.all_guidance())
 
 
+def test_llm_answers_with_line_breaks_inside_strings_are_read():
+    from pgmem.llm import parse_json
+    assert parse_json('{"actions": "1. inspect\n2. fix"}') == {"actions": "1. inspect\n2. fix"}
+    _, items = split_knowledge('Text.\nKNOWLEDGE\n[{"statement": "two\nlines", "epistemic_status": "observation"}]')
+    assert items and items[0]["statement"] == "two\nlines"
+
+
+def test_statements_that_fit_no_form_are_not_sent_to_the_llm():
+    cfg, s, an = setup()
+    a1 = client(s, cfg, "a1")
+    conclude(a1, [{"statement": "More exploration helps", "epistemic_status": "hypothesis"},
+                  {"statement": "The ionization energy of CCO is above 9.0 eV", "epistemic_status": "observation"}])
+    drain(an)
+    recs = s.all_verifications()
+    assert int(s.r.hget(s._k("analyzer", "stats"), "llm_calls")) == 1 and len(recs) == 2
+    assert sorted(r["claim"]["form"] for r in recs.values()) == ["bound", "none"]
+
+
 # --------------------------------------------------------------------------------------------- provenance
 def test_provenance_records_received_online_are_counted_but_not_the_post_reading():
     src = FakeSource()

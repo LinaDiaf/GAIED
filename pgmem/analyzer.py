@@ -397,8 +397,10 @@ class Analyzer:
                         self._guide(f"Your statement \"{k.text}\" rests on an unreliable result ({m1.text}); "
                                     "reassess it.", "data_quality", "observation", [did], k.author)
             if self.cfg.structured and not self.s.get_verification(kid):
-                claim = verification.normalize(self._llm_json(verification.extraction_prompt(),
-                                                              f"Statement: {k.text}\nMeasured molecules: {measured}"))
+                # deterministic first: a statement naming no molecule, number or motif fits no checkable form
+                claim = verification.normalize(self._llm_json(
+                    verification.extraction_prompt(), f"Statement: {k.text}\nMeasured molecules: {measured}")
+                ) if verification.could_be_checked(k.text) else {"form": "none"}
                 res = verification.check(claim, good, bad)
                 verification.record(self.s, kid, claim, res, "new statement")
                 if res["verdict"] == "contradicted":

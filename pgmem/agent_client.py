@@ -356,7 +356,7 @@ def split_knowledge(text: str) -> tuple[str, list[dict]]:
     if i < 0 or j <= i:
         return body, []
     try:
-        items = json.loads(block[i:j + 1])
+        items = json.loads(block[i:j + 1], strict=False)   # line breaks inside strings are common
     except ValueError:
         log.warning("KNOWLEDGE block not readable as JSON; no knowledge stored for this conclusion")
         return body, []

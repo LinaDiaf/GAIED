@@ -10,7 +10,8 @@ each, one after the other, each in its own memory namespace. Meant to run inside
 For each run, results/eval/<series>/<run id>/ receives: meta.json, campaign.log, analyzer.log, flowcept_settings.yaml,
 faults.json and faults.jsonl (every computation and injected fault: the ground truth), provenance.jsonl (every Flowcept record published
 during the run), memory.json and events.json (the memory at the end), and the post-execution report when the
-analysis agent ran. A run whose meta.json says "ok" is skipped, so an interrupted series can be resumed.
+analysis agent ran. A run whose meta.json says "ok" is skipped, so an interrupted series can be resumed; a run made
+with another evaluation design (DESIGN in config.py) stops the series instead of being mixed with this one.
 
 Flowcept runs in online mode for every condition (the same settings, so the same overhead), and a recorder keeps
 every published record: in online mode Flowcept's own JSONL file only keeps the last buffer.
@@ -32,7 +33,7 @@ import yaml
 
 from pgmem.store import MemoryStore
 
-from .config import CONDITIONS, SCENARIOS, SERIES
+from .config import CONDITIONS, DESIGN, SCENARIOS, SERIES
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 REDIS_HOST, REDIS_PORT = os.environ.get("REDIS_HOST", "localhost"), int(os.environ.get("REDIS_PORT", "6379"))
@@ -133,9 +134,14 @@ def run_one(series: str, cfg: dict, scenario: str, condition: str, rep: int, out
     run_id = f"{scenario}__{condition}__r{rep}"
     run_dir = os.path.join(out_root, run_id)
     meta_path = os.path.join(run_dir, "meta.json")
-    if os.path.exists(meta_path) and json.load(open(meta_path)).get("status") == "ok":
-        print(f"skip {run_id} (done)")
-        return json.load(open(meta_path))
+    if os.path.exists(meta_path):
+        old = json.load(open(meta_path))
+        if old.get("design") != DESIGN:     # a run of an earlier version of pgmem under the same name
+            sys.exit(f"{run_dir} was made with another version of the evaluation ({old.get('design')}); move the "
+                     f"folder {out_root} away (e.g. rename it) and start again")
+        if old.get("status") == "ok":
+            print(f"skip {run_id} (done)")
+            return old
     if os.path.isdir(run_dir):              # an interrupted run is started again from scratch
         shutil.rmtree(run_dir)
     os.makedirs(run_dir)
@@ -167,7 +173,7 @@ def run_one(series: str, cfg: dict, scenario: str, condition: str, rep: int, out
             "model": env.get("OLLAMA_MODEL") or env.get("LLM_MODEL"), "max_iterations": max_iterations,
             "llm_seed": env["LLM_SEED"], "motifs": sc.get("motifs"),
             "embed_model": env.get("PGMEM_EMBED_MODEL", "nomic-embed-text"),
-            "git_commit": git_commit(), "started_at": time.time(), "status": "running"}
+            "git_commit": git_commit(), "design": DESIGN, "started_at": time.time(), "status": "running"}
     json.dump(meta, open(meta_path, "w"), indent=1)
     print(f"run {run_id} (namespace {namespace})", flush=True)
 

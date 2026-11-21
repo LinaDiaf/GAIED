@@ -7,7 +7,8 @@ Flowcept's provenance and from the fault log, never from the memory or the analy
 Metrics (the specification's list):
   task completion             campaign ended normally; iterations completed (LangGraph `should_continue` nodes);
                               best value found (true value: injected offsets removed)
-  redundant computations      xTB computations of a molecule beyond the first (provenance)
+  redundant computations      xTB computations of a molecule beyond the first (provenance); SMILES RDKit cannot
+                              read fail before xTB and are counted apart
   inefficient exploration     proposals of a molecule whose computation had already ended (provenance)
   repeated technical failures failed computations of a molecule that had already failed (provenance)
   learning and adaptation     failing-motif share of the proposals, per phase (motif_failures)
@@ -122,7 +123,8 @@ def run_metrics(run_dir: str) -> dict:
     for t in comps:
         t["_key"] = chem.canonical(smiles_of(t) or "")
         t["_ok"] = t.get("status") != "ERROR"
-    per_key = Counter(t["_key"] for t in comps)
+    per_key = Counter(t["_key"] for t in comps if chem.parses(t["_key"]))     # molecules that reached xTB
+    invalid = Counter(t["_key"] for t in comps if not chem.parses(t["_key"]))
     offsets = {f["key"]: f["delta"] for f in faults if f["fault"] == "offset"}
     values = [(t["_key"], as_float(as_dict(t.get("generated")).get("ionization_energy"))) for t in comps if t["_ok"]]
     values = [(k, v) for k, v in values if v is not None]
@@ -150,6 +152,9 @@ def run_metrics(run_dir: str) -> dict:
         "iterations_expected": n_agents * meta["max_iterations"],
         "computations": len(comps), "distinct_molecules": len(per_key),
         "redundant_computations": sum(n - 1 for n in per_key.values() if n > 1),
+        # SMILES that RDKit cannot read fail before xTB: counted apart (attempts, and attempts of a known one)
+        "invalid_smiles_attempts": sum(invalid.values()),
+        "invalid_smiles_repeated": sum(n - 1 for n in invalid.values() if n > 1),
         "failed_computations": sum(1 for t in comps if not t["_ok"]),
         "repeated_failures": repeated_failures,
         "proposals": len(proposals), "proposals_already_known": len(late),
@@ -217,7 +222,8 @@ def run_metrics(run_dir: str) -> dict:
         for d in diags:
             by_rule[d["data"]["rule"]].add(d["key"])
         m1_key = {e["id"]: e["key"] for e in x.of("M1")}
-        acc = {"redundant_computation": prf({k for k, n in per_key.items() if n > 1}, by_rule["redundant_computation"])}
+        acc = {"redundant_computation": prf({k for k, n in (per_key + invalid).items() if n > 1},
+                                            by_rule["redundant_computation"])}
         fails = Counter(t["_key"] for t in comps if not t["_ok"])
         acc["repeated_failure"] = prf({k for k, n in fails.items() if n > 1}, by_rule["repeated_failure"])
         names = {smarts: name for name, smarts in chem.FEATURES.items()}
@@ -266,6 +272,7 @@ def _share(items: list, smarts: str) -> float | None:
 
 
 FAILURE_RULES = ("repeated_failure", "recurring_failure", "failure_explanation")
+INJECTED_CLASS = "scf_not_converged"          # the class of the injected failures (xTB's ordinary message)
 
 
 def adaptation_metrics(meta: dict, comps: list, proposals: list, computation_log: list, diags: list,
@@ -294,8 +301,9 @@ def adaptation_metrics(meta: dict, comps: list, proposals: list, computation_log
         out[f"phase{i + 1}_failures"] = sum(1 for t in comps if not t["_ok"]
                                             and lo <= (as_float(t.get("started_at")) or 0) < hi)
     if switch_t is not None:
-        after = [d for d in diags if d["created_at"] > switch_t
-                 and d["data"]["rule"] in FAILURE_RULES + ("procedure_no_longer_effective",)]
+        after = [d for d in diags if d["created_at"] > switch_t and (
+            d["data"]["rule"] == "procedure_no_longer_effective"
+            or d["data"]["rule"] in FAILURE_RULES and INJECTED_CLASS in d["key"] + d["text"])]
         first = min((d["created_at"] for d in after), default=None)
         out["computations_to_detect_change"] = (sum(1 for f in computation_log if switch_t <= f["t"] < first)
                                                 if first else None)
@@ -426,6 +434,7 @@ def mean_sd(xs: list, ci: bool = False) -> str:
 SUMMARY_COLUMNS = [
     ("runs ok", None), ("iterations", "iterations_completed"), ("computations", "computations"),
     ("valid distinct molecules", "valid_distinct_molecules"), ("redundant", "redundant_computations"),
+    ("invalid SMILES (repeated)", ("invalid_smiles_attempts", "invalid_smiles_repeated")),
     ("failed", "failed_computations"), ("repeated failures", "repeated_failures"),
     ("proposals already known", "proposals_already_known"), ("best IE, true (secondary)", "best_value_true"),
     ("duration (s)", "duration_s"), ("agent LLM calls", "agent_llm_calls"),

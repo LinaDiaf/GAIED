@@ -90,7 +90,7 @@ class OllamaLLM:
 
     def _parse_tool_calls(self, content: str) -> list[dict]:
         try:
-            parsed = json.loads(content[content.find("{"): content.rfind("}") + 1])
+            parsed = json.loads(content[content.find("{"): content.rfind("}") + 1], strict=False)
         except (json.JSONDecodeError, ValueError):
             return []
         calls = []

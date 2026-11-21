@@ -27,6 +27,8 @@ from __future__ import annotations
 DIFFERENT_SEEDS = "CNC(N)=O,CC1=C(O)N=C(O)N1"     # GAIED's default seeds: two agents exploring different regions
 SAME_SEEDS = "CNC(N)=O,CNC(N)=O"                  # two agents starting from the same molecule
 SWITCH_AFTER_ITERATIONS = 4                       # iterations of all agents before the failing motif changes
+DESIGN = "pgmem-v3"          # written in every run: runs of another design are never mixed into a series
+
 NITRILE, CF3 = "C#N", "[CX4](F)(F)F"
 
 SCENARIOS: dict[str, dict] = {

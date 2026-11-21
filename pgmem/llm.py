@@ -47,7 +47,7 @@ def parse_json(text: str) -> dict:
     if not m:
         return {}
     try:
-        d = json.loads(m.group(0))
+        d = json.loads(m.group(0), strict=False)    # models write line breaks inside strings
         return d if isinstance(d, dict) else {}
     except ValueError:
         return {}

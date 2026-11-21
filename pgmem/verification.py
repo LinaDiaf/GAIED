@@ -22,6 +22,7 @@ it used as deterministic evidence edges of the statement (SUPPORTED_BY / CONTRAD
 from __future__ import annotations
 
 import math
+import re
 import statistics
 import time
 
@@ -41,6 +42,13 @@ BY = "verification"
 
 def extraction_prompt() -> str:
     return EXTRACT_CLAIM.replace("FEATURE_NAMES", ", ".join(m for m in chem.FEATURES if m not in chem.GENERIC))
+
+
+def could_be_checked(statement: str) -> bool:
+    """Every checkable form names a molecule, a number or a motif; a statement with none of them is not sent to
+    the LLM."""
+    return bool(DOMAIN.entities_in(statement) or re.search(r"\d", statement)
+                or DOMAIN.motifs_named_in(statement))
 
 
 def normalize(claim: dict) -> dict:
