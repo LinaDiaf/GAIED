@@ -20,6 +20,7 @@ import asyncio
 import contextvars
 import json
 import logging
+import os
 import re
 import time
 import uuid
@@ -38,6 +39,7 @@ CURRENT_NODE: contextvars.ContextVar[str | None] = contextvars.ContextVar("pgmem
 CURRENT_AGENT: contextvars.ContextVar[str | None] = contextvars.ContextVar("pgmem_agent", default=None)
 
 QUANTITY, UNIT = "ionization_energy", "eV"    # ASE returns energies in eV
+DEFAULT_GOAL = "find molecules with the highest ionization energy (eV)"
 
 KNOWLEDGE_INSTRUCTION = """
 
@@ -53,11 +55,31 @@ results."""
 _BLOCK = re.compile(r"\n?\s*\**KNOWLEDGE\**\s*:?\s*\n?", re.I)
 
 
-def from_env(agent_name: str) -> "MemoryClient | None":
+def from_env(agent_name: str, conditions: dict | None = None) -> "MemoryClient | None":
+    """The agent's memory client; records the campaign (goal, method and its parameters from `conditions`, seeds)
+    if this memory has none yet."""
     cfg = Config.from_env()
     if not cfg.enabled:
         return None
-    return MemoryClient(MemoryStore.connect(cfg.redis_host, cfg.redis_port, cfg.namespace), cfg, agent_name)
+    store = MemoryStore.connect(cfg.redis_host, cfg.redis_port, cfg.namespace)
+    try:
+        record_campaign(store, cfg, conditions)
+    except Exception as exc:  # noqa: BLE001 - the campaign record never stops an agent
+        log.warning("campaign record not written: %s", exc)
+    return MemoryClient(store, cfg, agent_name)
+
+
+def record_campaign(store: MemoryStore, cfg: Config, conditions: dict | None = None) -> None:
+    conditions = dict(conditions or {})
+    seeds = [s for s in os.environ.get("SEEDS", "").split(",") if s]
+    store.set_campaign(
+        goal={"goal": os.environ.get("PGMEM_GOAL", DEFAULT_GOAL),
+              "direction": os.environ.get("PGMEM_DIRECTION", "maximize")},
+        run={"method": conditions.pop("method", None),
+             "parameters": json.dumps(conditions, sort_keys=True) if conditions else None,
+             "seeds": ", ".join(seeds), "n_agents": len(seeds) or None,
+             "max_iterations": os.environ.get("MAX_ITERATIONS"),
+             "started": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), "campaign_id": cfg.campaign_id})
 
 
 class MemoryClient:
@@ -266,6 +288,10 @@ class MemoryClient:
                 "M2": self._retrieve("M2", q, kinds=("failure", "diagnosis", "attempt"), keep=_worth_showing),
                 "M3": self._retrieve("M3", q)}
 
+    def campaign(self) -> str:
+        """The campaign's goal and settings, as a short prompt section."""
+        return self.s.campaign_text()
+
     def context(self, node: str, query: str) -> str:
         """The memory section added to a node's prompt; guidance shown here is marked delivered."""
         if not self.cfg.structured:
@@ -293,6 +319,8 @@ class MemoryClient:
                     f"- {g.message} [{g.epistemic_status}]" for g in gs))
                 for g in gs:
                     self.s.mark_delivered(g.id, self.agent, node)
+        if campaign := self.campaign():
+            parts.insert(0, campaign)
         return ("\n\nSHARED MEMORY\n" + "\n\n".join(parts)) if parts else ""
 
     def _log(self, event: str, q: retrieval.Query, found: dict, procs: list, extra_m1: list | None = None,

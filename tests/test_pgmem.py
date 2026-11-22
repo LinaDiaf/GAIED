@@ -549,6 +549,41 @@ def test_fault_selection_is_deterministic_and_the_scenarios_hide_the_injection()
             os.environ.update(old)
 
 
+def test_campaign_goal_is_written_once_and_reaches_the_agents_and_the_analysis_agent():
+    from pgmem.agent_client import record_campaign
+    cfg, store, _ = setup()
+    old = dict(os.environ)
+    os.environ.update(SEEDS="CNC(N)=O,CCO", MAX_ITERATIONS="8", PGMEM_GOAL="raise the ionization energy")
+    try:
+        store.update_campaign("goal", "find molecules with the highest ionization energy")   # set by a human first
+        record_campaign(store, cfg, COND)
+        os.environ["PGMEM_GOAL"] = "another goal"                     # a later agent does not replace it
+        record_campaign(store, cfg, COND)
+    finally:
+        os.environ.clear()
+        os.environ.update(old)
+    c = store.campaign()
+    assert c["goal"] == "find molecules with the highest ionization energy" and c["direction"] == "maximize"
+    assert c["method"] == "GFN2-xTB" and '"accuracy": 0.05' in c["parameters"] and c["n_agents"] == "2"
+    assert c["campaign_id"] == "c1" and store.campaign_text().splitlines()[1].startswith("- goal:")
+    a = client(store, cfg, "CCO#1")
+    a.record_result("CCO", 15.0, OK, "t1", "w1", "c1")
+    assert "- goal: find molecules" in a.context("plan", "CCO")
+
+    class Spy:
+        users: list = []
+
+        def ask_json(self, system, user):
+            self.users.append(user)
+            return {}
+    an = Analyzer(store, cfg, llm=Spy())
+    an._llm_json("system", "Recent iterations: none")
+    assert Spy.users[0].startswith("CAMPAIGN") and "Recent iterations" in Spy.users[0]
+    cfg2 = Config(**{**cfg.__dict__, "campaign_id": "c2"})          # the same memory used by a new campaign
+    record_campaign(store, cfg2, COND)
+    assert store.campaign()["campaign_id"] == "c2" and store.campaign()["goal"].startswith("find molecules")
+
+
 TESTS = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
 
 if __name__ == "__main__":

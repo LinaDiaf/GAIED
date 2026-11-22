@@ -38,6 +38,7 @@ edge. Provenance stays in Flowcept: the memory refers to it, it never copies it.
 | `pgmem/provenance.py` | adapter to Flowcept (JSONL files, online channel) |
 | `pgmem/faults.py` | fault injection for the controlled evaluation |
 | `pgmem/show.py`, `pgmem/collect.py` | print a memory; zip a namespace's memory, events, provenance and reports |
+| `pgmem/campaign.py` | read or edit the campaign record (goal and settings) |
 
 ## Nodes
 
@@ -98,6 +99,7 @@ verification                        verdict records, by entry id
 emb                                 embeddings of entries
 g:{id}, gq, gseen:{agent}           guidance, its index, what each agent has received
 claim:{molecule}                    per-molecule lock
+campaign                            the campaign record: goal, direction, method, parameters, seeds, run (hash)
 events                              memory events (Redis Stream, consumer group of the analysis agent)
 ```
 
@@ -178,6 +180,21 @@ gave): scheduled sections at `plan`, `critique` and `update`; and the `query_mem
 | `simulate` | existing result reused, or the per-molecule lock; result (M1 ABOUT its molecule) or failure (M2) |
 | `conclude` | a `KNOWLEDGE` block asked for: statements (M3) with their status, the molecules they cite (evidence edges of origin `llm`) and what they explain; the iteration's attempt (M2), which its results and failures are `PART_OF` |
 
+### Campaign
+
+Each memory holds one campaign record (`campaign`), to which all its entries belong through the namespace:
+
+| Field | Written | Value |
+|---|---|---|
+| `goal`, `direction` | if absent | `PGMEM_GOAL`, `PGMEM_DIRECTION`, or a human with `python -m pgmem.campaign set` |
+| `method`, `parameters` | per run | the xTB conditions of the agents (`xtb_conditions`) |
+| `seeds`, `n_agents`, `max_iterations`, `started`, `campaign_id` | per run | the launch settings and the Flowcept campaign |
+
+The first agent writes it at start (`from_env`); run fields are replaced when another Flowcept campaign uses the same
+memory. It is the first section of every memory context (`plan`, `tool_calling`, `critique`, `update`) and starts
+the user message of every LLM call of the analysis agent (`SUGGEST_DIRECTION`, `DRAFT_PROCEDURE`,
+`EXPLAIN_FAILURES`), so that advice and procedures serve the campaign's goal.
+
 The agents never touch the graph: the code creates the nodes and edges. The lock: before computing a molecule an
 agent takes `claim:{molecule}` (Redis `SET NX`, expiring after `PGMEM_CLAIM_TTL_S`); another agent asking for the
 same molecule waits for the stored result or failure.
@@ -253,6 +270,7 @@ process: the pool worker is a fork whose Flowcept buffer is never flushed), `[ga
 |---|---|---|
 | `PGMEM_MODE` | `off` | `off`, `basic`, `structured`, `full` |
 | `PGMEM_NAMESPACE` | `default` | memory namespace (a new one per experiment) |
+| `PGMEM_GOAL`, `PGMEM_DIRECTION` | `find molecules with the highest ionization energy (eV)`, `maximize` | the campaign's goal, written in the memory if it has none |
 | `REDIS_HOST`, `REDIS_PORT` | `localhost`, `6379` | Redis server |
 | `PGMEM_RETRIEVAL_LIMIT` | `5` | entries per section of a prompt |
 | `PGMEM_CHANNELS` | `bm25,semantic,chem,graph` | retrieval channels (ablations) |
@@ -284,6 +302,7 @@ docker compose --profile analysis run -d --rm --no-deps --name pgmem-analyzer -e
 docker compose run --rm --no-deps -e PGMEM_MODE=full -e PGMEM_NAMESPACE=run1 -e "SEEDS=CNC(N)=O,CNC(N)=O" -e MAX_ITERATIONS=3 gaied
 # memory, post-execution report, shareable zip
 docker compose run --rm --no-deps -e PGMEM_NAMESPACE=run1 gaied python -m pgmem.show
+docker compose run --rm --no-deps -e PGMEM_NAMESPACE=run1 gaied python -m pgmem.campaign   # or: set goal "..."
 docker compose run --rm --no-deps -e PGMEM_NAMESPACE=run1 analyzer python -m pgmem.analyzer --post
 docker stop pgmem-analyzer
 docker compose run --rm --no-deps gaied python -m pgmem.collect --namespace run1

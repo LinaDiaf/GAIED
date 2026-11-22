@@ -23,6 +23,7 @@ def main(argv: list[str] | None = None) -> None:
     a = ap.parse_args(argv)
     s = MemoryStore.connect(os.environ.get("REDIS_HOST", "localhost"), int(os.environ.get("REDIS_PORT", "6379")),
                             a.namespace)
+    print(s.campaign_text() or "no campaign recorded", end="\n\n")
     print(f"namespace {a.namespace}: " + ", ".join(f"{c}={s.count(c)}" for c in ("M1", "M2", "M3", "M4")))
     print("relations: " + ", ".join(f"{k}={v}" for k, v in sorted(s.graph.count_by_type().items())))
     print("\nM1 results (best first)")

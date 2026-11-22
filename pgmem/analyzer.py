@@ -195,7 +195,8 @@ class Analyzer:
         if self.llm is None:
             return {}
         self.s.r.hincrby(self.stats_key, "llm_calls", 1)
-        return self.llm.ask_json(system, user)       # an exception leaves the event pending
+        campaign = self.s.campaign_text()            # the goal the advice and procedures must serve
+        return self.llm.ask_json(system, f"{campaign}\n\n{user}" if campaign else user)  # exception: event pending
 
     def investigate(self, node: str, depth: int = 2, limit: int = 20) -> str:
         """A bounded subgraph around a node, as text for the LLM: each node reached, the relation and direction of
