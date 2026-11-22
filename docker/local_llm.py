@@ -49,7 +49,9 @@ import requests
 from langchain.messages import HumanMessage
 from langchain.messages import SystemMessage
 
-_THINK_RE = re.compile(r"<think>.*?</think>", re.DOTALL)
+# reasoning that some models write before their answer (<think>...</think>, Gemma's <thought>...</thought>), even
+# when the opening tag is missing: everything up to the last closing tag is dropped
+_THINK_RE = re.compile(r"^.*</(?:think|thought)>", re.DOTALL)
 log = logging.getLogger("local_llm")
 
 
