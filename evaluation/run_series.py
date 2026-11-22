@@ -3,7 +3,8 @@ Run an evaluation series: every (repetition, scenario, condition) of a series in
 each, one after the other, each in its own memory namespace. Meant to run inside the gaied container:
 
     python -m evaluation.run_series smoke                      # scripted LLM, a few minutes
-    python -m evaluation.run_series pilot                      # the model of OLLAMA_URL / OLLAMA_MODEL
+    python -m evaluation.run_series pilot                      # the configured model: Ollama (OLLAMA_URL,
+                                                               # OLLAMA_MODEL) or an API (LLM_PROVIDER=openai)
                                                                # (and PGMEM_EMBED_MODEL for embeddings)
     python -m evaluation.run_series main --only full           # a subset of conditions
 
@@ -170,7 +171,8 @@ def run_one(series: str, cfg: dict, scenario: str, condition: str, rep: int, out
                     "SCRIPTED_DELAY_S": env.get("SCRIPTED_DELAY_S", "1")})
     meta = {"series": series, "run_id": run_id, "scenario": scenario, "condition": condition, "repetition": rep,
             "namespace": namespace, "seeds": sc["seeds"], "faults": sc["faults"], "llm": cfg["llm"],
-            "model": env.get("OLLAMA_MODEL") or env.get("LLM_MODEL"), "max_iterations": max_iterations,
+            "provider": env.get("LLM_PROVIDER", "ollama"),
+            "model": env.get("LLM_MODEL") or env.get("OLLAMA_MODEL"), "max_iterations": max_iterations,
             "llm_seed": env["LLM_SEED"], "motifs": sc.get("motifs"),
             "embed_model": env.get("PGMEM_EMBED_MODEL", "nomic-embed-text"),
             "git_commit": git_commit(), "design": DESIGN, "started_at": time.time(), "status": "running"}

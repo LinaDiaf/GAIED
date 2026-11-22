@@ -59,7 +59,7 @@ def client(store, cfg, name):
     return MemoryClient(store, cfg, name)
 
 
-def drain(an, rounds: int = 8):
+def drain(an, rounds: int = 60):
     for _ in range(rounds):
         if not an.step(block_ms=10, retry_idle_ms=0):
             break
@@ -297,10 +297,11 @@ def test_analysis_work_is_not_lost_when_the_llm_is_unavailable():
     fail(a1, "CC#N")
     fail(a1, "NCC#N")
     drain(an)
-    assert not diagnoses(s, "recurring_failure")                 # left pending: nothing half-written
+    assert diagnoses(s, "recurring_failure") and s.all_guidance()   # the rules do not wait for the LLM
+    assert not s.all("M4") and not diagnoses(s, "failure_explanation")   # its tasks stay pending
     an.llm = AnalysisLLM("scripted")
     drain(an)
-    assert diagnoses(s, "recurring_failure") and s.all("M4")
+    assert s.all("M4") and diagnoses(s, "failure_explanation")
 
 
 # --------------------------------------------------------------------------------------------- analysis: impact

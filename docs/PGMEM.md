@@ -204,9 +204,13 @@ procedure or advise a change of direction). It never rewrites an entry.
 | | no improvement in two iterations | | diagnosis; advice to the agent |
 | provenance | redundant computation, LLM call without tool calls, task in error | Flowcept records | diagnoses |
 
-`investigate(node)` gives the LLM a bounded subgraph (depth 2, 20 nodes) as text, never the whole graph. Memory
-events are processed once (Redis consumer group); an event whose processing fails, for example because the LLM is
-unavailable, stays pending and is retried. The provenance records received online are counted, so a loss on
+The rules run as soon as an event arrives. The LLM's interpretation (a candidate explanation, a procedure draft, the
+checkable form of a statement, advice) goes to a queue of its own, served only when no memory event is waiting: a
+slow, shared or rate-limited LLM never delays the deterministic findings and their guidance. A statement naming no
+molecule, number or motif is not sent to the LLM (it fits no checkable form). `investigate(node)` gives the LLM a
+bounded subgraph (depth 2, 20 nodes) as text, never the whole graph. Events and tasks are processed once (Redis
+consumer groups); one whose processing fails, for example because the LLM is unavailable, stays pending and is
+retried. The provenance records received online are counted, so a loss on
 Flowcept's channel is visible in the evaluation. After a run, `--post` writes a report: Flowcept's own summary,
 findings, procedures and their history, guidance outcomes, coordination, memory and edge counts.
 
@@ -255,13 +259,16 @@ process: the pool worker is a fork whose Flowcept buffer is never flushed), `[ga
 | `PGMEM_EMBED_MODEL`, `OLLAMA_URL` | `nomic-embed-text`, `http://localhost:11434` | embedding model of the semantic channel (off for the process if unreachable) |
 | `PGMEM_ON_DEMAND`, `PGMEM_MEMORY_QUERIES` | `true`, `2` | the `query_memory` tool and its rounds per decision |
 | `PGMEM_CLAIM_TTL_S` | `600` | expiry of a per-molecule lock |
-| `PGMEM_ANALYZER_LLM` | `true` | `false`: the analysis agent runs its deterministic rules only |
+| `PGMEM_ANALYZER_LLM` | `true` | `false`: the analysis agent runs its deterministic rules only (its LLM queue is not served) |
 | `PGMEM_ANALYSIS_DEPTH` | `3` | how far the analysis agent follows what rests on a node |
 | `PGMEM_ANALYSIS_SOURCES` | `memory,provenance` | sources the analysis agent analyzes (the judgement of guidance always runs) |
 | `PGMEM_PROVENANCE` | `auto` | `auto`, `stream`, `jsonl`, `none` |
 | `PGMEM_JSONL_GLOB` | `output/flowcept_buffer_*.jsonl` | Flowcept files read by the analysis agent |
 | `PGMEM_FAULTS`, `PGMEM_FAULTS_LOG` | unset | fault injection (`pgmem/faults.py`) and its ground-truth log |
 | `TOOL_CALL_RETRIES` | `3` | retries when the LLM gives no tool call |
+| `LLM_PROVIDER=openai`, `LLM_BASE_URL`, `LLM_MODEL`, `LLM_API_KEY` | | an API in the OpenAI format instead of Ollama (`docker/env.example.txt`) |
+| `LLM_RPM`, `LLM_RPD` | unset | the API key's quota per minute and per day: every process using the key waits for a free slot (counted in Redis); a 429 answer is retried after the delay the provider gives; an exhausted daily quota stops the run |
+| `LLM_SEND_SEED` | `true` | send `LLM_SEED` to the API (set `false` if the provider rejects it) |
 | `LLM_PROVIDER=scripted` (+ `OLLAMA_MODEL=scripted`) | | scripted LLM and embeddings for tests; `SCRIPTED_DELAY_S` imitates latency |
 | `LLM_SEED` | unset | sampling seed of the Ollama model (paired evaluation runs) |
 

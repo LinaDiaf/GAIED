@@ -74,10 +74,13 @@ ABLATIONS = [c for c in CONDITIONS if c not in MAIN_CONDITIONS]
 SERIES: dict[str, dict] = {
     "smoke": {"llm": "scripted", "scenarios": list(SCENARIOS), "conditions": MAIN_CONDITIONS + ABLATIONS,
               "repetitions": 1, "max_iterations": 3},
-    "pilot": {"llm": "ollama", "scenarios": list(SCENARIOS), "conditions": MAIN_CONDITIONS,
+    # what the configured model proposes, before choosing the failing motifs (python -m evaluation.motif_frequency)
+    "probe": {"llm": "model", "scenarios": ["motif_failures"], "conditions": ["off"], "repetitions": 2,
+              "max_iterations": 3},
+    "pilot": {"llm": "model", "scenarios": list(SCENARIOS), "conditions": MAIN_CONDITIONS,
               "repetitions": 1, "max_iterations": 3},
-    "main": {"llm": "ollama", "scenarios": list(SCENARIOS), "conditions": MAIN_CONDITIONS,
+    "main": {"llm": "model", "scenarios": list(SCENARIOS), "conditions": MAIN_CONDITIONS,
              "repetitions": 5, "max_iterations": 3},
-    "ablations": {"llm": "ollama", "scenarios": list(SCENARIOS), "conditions": ABLATIONS,
+    "ablations": {"llm": "model", "scenarios": list(SCENARIOS), "conditions": ABLATIONS,
                   "repetitions": 2, "max_iterations": 3},
 }

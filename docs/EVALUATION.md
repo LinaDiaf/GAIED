@@ -60,7 +60,7 @@ Ground truth comes from Flowcept's provenance and the fault log, never from the 
 | Metric | Measure |
 |---|---|
 | Task completion | campaign ended normally; iterations completed; valid results and distinct valid molecules; best ionization energy (true value; secondary) |
-| Redundant computations | xTB computations of a molecule beyond its first |
+| Redundant computations | xTB computations of a molecule beyond its first; SMILES that RDKit cannot read fail before xTB and are counted apart (attempts, and attempts of one already seen) |
 | Inefficient exploration | proposals of a molecule whose computation had already ended; proposals of molecules the memory had just shown |
 | Repeated technical failures | failed computations of a molecule that had already failed |
 | Learning and adaptation (`motif_failures`) | failing-motif share of the proposals in each half of each phase; failures per phase; old motif's share after the change; computations until the change is diagnosed; old failure guidance delivered after the change |
@@ -71,7 +71,7 @@ Ground truth comes from Flowcept's provenance and the fault log, never from the 
 | Retrieval | share of retrieved entries relevant to the task (scheduled and on demand); entries found by each channel. An entry is relevant when it is about one of the task's molecules, a similar one (Tanimoto >= 0.4), or a specific motif of them. A structural criterion, not an expert judgement |
 | Memory use | questions asked to the memory; decisions preceded by a question |
 | Provenance | traceability (memory references resolving to a recorded task); coverage (records received online by the analysis agent / records recorded) |
-| Overhead | campaign duration; LLM calls of the agents and of the analysis agent; analysis time; memory size and edges (and those of origin `llm`) |
+| Overhead | campaign duration; LLM calls of the agents and of the analysis agent; analysis time; how long the analysis agent's LLM tasks waited; guidance never delivered; memory size and edges (and those of origin `llm`) |
 
 `summary.md` gives, per scenario and condition, the mean ± standard deviation and, for counts, the 95 % t interval of
 the mean and the range. With few repetitions these are small samples: differences are indications.
@@ -81,9 +81,15 @@ the mean and the range. With few repetitions these are small samples: difference
 | Series | LLM | Runs | Purpose |
 |---|---|---|---|
 | `smoke` | scripted | 4 scenarios × 11 conditions × 1 = 44 | check that everything runs (under a minute per run) |
-| `pilot` | Ollama model | 4 × 4 × 1 = 16 | check the scenarios with the real model |
-| `main` | Ollama model | 4 × 4 × 5 = 80 | the paper's comparison |
-| `ablations` | Ollama model | 4 × 7 × 2 = 56 | contribution of each retrieval channel, on-demand access, graph depth, cross-source analysis |
+| `probe` | the configured model | `motif_failures` × `off` × 2 | what the model proposes: `python -m evaluation.motif_frequency results/eval/probe` gives the share of each motif, to choose the failing motifs (a motif the model rarely proposes leaves nothing to learn) |
+| `pilot` | the configured model | 4 × 4 × 1 = 16 | check the scenarios with the real model |
+| `main` | the configured model | 4 × 4 × 5 = 80 | the paper's comparison |
+| `ablations` | the configured model | 4 × 7 × 2 = 56 | contribution of each retrieval channel, on-demand access, graph depth, cross-source analysis |
+
+The model is the one of the environment: Ollama (`OLLAMA_URL`, `OLLAMA_MODEL`) or an API (`LLM_PROVIDER=openai`
+and the variables of `docker/.env`). Each run records its provider, model and embedding model. A campaign makes
+about 50 LLM calls (agents and analysis agent together): with an API, set `LLM_RPM` and `LLM_RPD` to the key's
+quota; a run stopped by an exhausted daily quota is started again when the series is resumed.
 
 ## Running
 

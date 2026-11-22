@@ -176,6 +176,9 @@ def run_metrics(run_dir: str) -> dict:
     m["memory_bytes"] = os.path.getsize(mem_path) if os.path.exists(mem_path) else 0
     m["analyzer_llm_calls"] = int(float(x.stats.get("llm_calls", 0)))
     m["analyzer_event_seconds"] = round(float(x.stats.get("event_seconds", 0)), 2)
+    tasks = int(float(x.stats.get("tasks", 0)))       # LLM work of the analysis agent, done after the rules
+    m["analysis_llm_tasks"] = tasks
+    m["analysis_task_wait_s"] = round(float(x.stats.get("task_wait_seconds", 0)) / tasks, 1) if tasks else None
     if "provenance_records" in x.stats:   # absent: not measured (no provenance source)
         expected = {r["task_id"] for r in records if r.get("task_id") and is_relevant(r)}
         m["provenance_expected"] = len(expected)
@@ -184,6 +187,7 @@ def run_metrics(run_dir: str) -> dict:
 
     judged = x.judged()
     m["guidance_created"] = len(x.guidance)
+    m["guidance_never_delivered"] = sum(1 for g in x.guidance if not g["delivered"])
     m["guidance_deliveries"] = sum(len({d["agent"] for d in g["delivered"]}) for g in x.guidance)
     for k in ("applied", "effective"):
         m[f"guidance_{k}"] = sum(1 for e in judged if e["props"].get(k) is True)
@@ -438,13 +442,14 @@ SUMMARY_COLUMNS = [
     ("failed", "failed_computations"), ("repeated failures", "repeated_failures"),
     ("proposals already known", "proposals_already_known"), ("best IE, true (secondary)", "best_value_true"),
     ("duration (s)", "duration_s"), ("agent LLM calls", "agent_llm_calls"),
-    ("analysis LLM calls", "analyzer_llm_calls"),
+    ("analysis LLM calls", "analyzer_llm_calls"), ("LLM task wait (s)", "analysis_task_wait_s"),
 ]
 MEMORY_COLUMNS = [
     ("traceability", "traceability"), ("provenance coverage", "provenance_coverage"), ("edges", "memory_edges"),
     ("memory queries", "memory_queries"), ("decisions after a query", "decisions_after_a_query"),
     ("re-proposed just shown", "proposals_of_molecules_just_shown"),
-    ("guidance delivered", "guidance_deliveries"), ("applied", "guidance_applied"),
+    ("guidance delivered (never)", ("guidance_deliveries", "guidance_never_delivered")),
+    ("applied", "guidance_applied"),
     ("not applied", "guidance_not_applied"), ("effective", "guidance_effective"),
     ("not effective", "guidance_not_effective"),
     ("procedures (motifs)", ("procedures", "procedure_motifs")), ("procedure effective / not", (

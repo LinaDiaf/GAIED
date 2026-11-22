@@ -21,8 +21,11 @@ explanation, draft a procedure, advise a change of direction):
              worked before and no longer does; two iterations without improvement
   provenance redundant computations, LLM calls without tool calls, tasks in error (Flowcept records)
 
-Processing: a memory event is acknowledged once processed (Redis consumer group) and recorded as done; an event
-whose processing fails (e.g. LLM unavailable) stays pending and is retried. A Flowcept record is processed once per
+Processing: the rules run as soon as an event arrives; the LLM's interpretation (explanations, procedures, claim
+forms, advice) goes to a queue of its own, served only when no memory event is waiting, so that a slow or rate-limited
+LLM never delays the deterministic findings and guidance. Events and tasks are acknowledged once processed (Redis
+consumer groups) and recorded as done; one whose processing fails (e.g. LLM unavailable) stays pending and is
+retried. A Flowcept record is processed once per
 task id; the records received online are counted, so a loss on Flowcept's channel is visible in the evaluation.
 """
 from __future__ import annotations
@@ -67,54 +70,74 @@ class Analyzer:
         self.source = source
         self.index: ProvenanceIndex = source.index if source is not None else ProvenanceIndex()
         self.stream, self.group = store._k("events"), cfg.analyzer_group
+        self.tasks = store._k("analyzer", "tasks")      # interpretation work for the LLM, done after the rules
         self.consumer = consumer or f"{socket.gethostname()}-{os.getpid()}"
         self.stats_key = store._k("analyzer", "stats")
         self.count_provenance = True           # records received during the run (provenance coverage)
         if source is not None:                 # 0 until records arrive: "none received" differs from "not measured"
             store.r.hsetnx(self.stats_key, "provenance_records", 0)
-        try:
-            store.r.xgroup_create(self.stream, self.group, id="0", mkstream=True)
-        except redis.exceptions.ResponseError as exc:
-            if "BUSYGROUP" not in str(exc):
-                raise
+        for stream in (self.stream, self.tasks):
+            try:
+                store.r.xgroup_create(stream, self.group, id="0", mkstream=True)
+            except redis.exceptions.ResponseError as exc:
+                if "BUSYGROUP" not in str(exc):
+                    raise
 
     # ================================================================== main loop
-    def step(self, block_ms: int = 1000, retry_idle_ms: int = 30000) -> int:
-        """Process what is available: pending (failed) events older than retry_idle_ms, new memory events, new
-        provenance records. Returns the number of items processed."""
-        n = 0
-        claimed = self.s.r.xautoclaim(self.stream, self.group, self.consumer, min_idle_time=retry_idle_ms,
-                                      start_id="0-0", count=50)
+    def _read(self, stream: str, count: int, block_ms: int | None, retry_idle_ms: int) -> list:
+        claimed = self.s.r.xautoclaim(stream, self.group, self.consumer, min_idle_time=retry_idle_ms,
+                                      start_id="0-0", count=count)
         msgs = list(claimed[1]) if claimed else []
-        for _, batch in self.s.r.xreadgroup(self.group, self.consumer, {self.stream: ">"}, count=50,
+        for _, batch in self.s.r.xreadgroup(self.group, self.consumer, {stream: ">"}, count=count,
                                             block=block_ms) or []:
             msgs.extend(batch)
-        for msg_id, fields in msgs:
-            n += self._handle_event(msg_id, fields)
+        return msgs
+
+    def step(self, block_ms: int = 1000, retry_idle_ms: int = 30000) -> int:
+        """Process what is available, deterministic work first: pending (failed) and new memory events, new
+        provenance records; then, only when none came, one task of the LLM queue. Returns the number of items
+        processed."""
+        n = sum(self._handle(self.stream, i, f, self._on_event)
+                for i, f in self._read(self.stream, 50, block_ms, retry_idle_ms))
         if self.source is not None:
             for rec in self.source.poll():
                 self._on_provenance(rec)
                 if self.count_provenance:
                     self.s.r.hincrby(self.stats_key, "provenance_records", 1)
                 n += 1
+        if n == 0:
+            n += sum(self._handle(self.tasks, i, f, self._on_task)
+                     for i, f in self._read(self.tasks, 1, None, retry_idle_ms))
         return n
 
-    def _handle_event(self, msg_id: str, fields: dict) -> bool:
-        done = self.s._k("analyzer", "done")
+    def _handle(self, stream: str, msg_id: str, fields: dict, handler) -> bool:
+        done = self.s._k("analyzer", "done", stream.rsplit(":", 1)[-1])
         if self.s.r.sismember(done, msg_id):
-            self.s.r.xack(self.stream, self.group, msg_id)
+            self.s.r.xack(stream, self.group, msg_id)
             return False
         t0 = time.time()
         try:
-            self._on_event(fields.get("event", ""), json.loads(fields.get("payload") or "{}"))
+            handler(fields.get("event", ""), json.loads(fields.get("payload") or "{}"))
         except Exception as exc:  # noqa: BLE001 - kept pending, retried later: no analysis work is lost
-            log.warning("event %s left pending (%s: %s)", msg_id, type(exc).__name__, exc)
+            log.warning("%s %s left pending (%s: %s)", stream.rsplit(":", 1)[-1], msg_id, type(exc).__name__, exc)
             return False
         finally:   # overhead of the analysis agent, kept for the evaluation
             self.s.r.hincrbyfloat(self.stats_key, "event_seconds", time.time() - t0)
         self.s.r.sadd(done, msg_id)
-        self.s.r.xack(self.stream, self.group, msg_id)
+        self.s.r.xack(stream, self.group, msg_id)
         return True
+
+    # ================================================================== the LLM queue
+    def _defer(self, task: str, **payload) -> None:
+        """Interpretation by the LLM, done when no memory event is waiting: the deterministic findings and guidance
+        are never delayed behind it."""
+        self.s.r.xadd(self.tasks, {"event": task, "payload": json.dumps({**payload, "queued_at": time.time()})})
+
+    def _on_task(self, task: str, p: dict) -> None:
+        {"explain": self._task_explain, "draft": self._task_draft, "verify": self._task_verify,
+         "advise": self._task_advise}[task](p)
+        self.s.r.hincrbyfloat(self.stats_key, "task_wait_seconds", time.time() - p["queued_at"])
+        self.s.r.hincrby(self.stats_key, "tasks", 1)
 
     def run_forever(self, idle_s: float = 0.5) -> None:
         log.info("analysis agent started (namespace %s, consumer %s)", self.s.ns, self.consumer)
@@ -319,36 +342,54 @@ class Analyzer:
         return None, fails if len({e.key for e in fails}) >= 2 else []
 
     def _recurring(self, fclass: str, motif: str | None, failures: list[Entry]) -> None:
+        """The pattern is diagnosed and announced at once (deterministic); its explanation and its procedure are
+        left to the LLM queue."""
         key, mols = f"{fclass}|{motif or '*'}", sorted({e.key for e in failures})
         what = f"molecules with a {motif.replace('_', ' ')} group" if motif else "different molecules"
         about = self.s.motif(motif) if motif else None
+        task = {"key": key, "failure_class": fclass, "motif": motif, "failures": [e.id for e in failures]}
         if self._fired("recurring_failure", key):
-            did, _ = self._diagnose("recurring_failure", key, "", "technical_failure", "observation",
-                                    [e.id for e in failures])
-            if self.cfg.structured and not self.s.by_key("M4", key):   # the earlier draft was unusable: again
-                self._store_procedure(key, fclass, motif, failures, self._draft_procedure(fclass, motif, failures))
+            self._diagnose("recurring_failure", key, "", "technical_failure", "observation", task["failures"])
+            if self.cfg.structured and not self.s.by_key("M4", key) and self.s.r.sadd(
+                    self.s._k("analyzer", "drafting"), key):       # the earlier draft was unusable: once more
+                self._defer("draft", **task)
             return
-        # LLM steps first: if the LLM is unavailable nothing is written and the event is retried later
-        context = self.investigate(about, 2, 20) if about else ""
-        expl = self._llm_json(EXPLAIN_FAILURES, f"Error class: {fclass}\nMotif: {motif or 'none'}\n" + "\n".join(
-            f"{e.key}: {e.data['error'][:200]}" for e in failures[:10]) + (f"\nGraph context:\n{context}" if context
-                                                                            else ""))
-        draft = self._draft_procedure(fclass, motif, failures)
         did, _ = self._diagnose("recurring_failure", key, f"{len(mols)} {what} failed with {fclass}: "
-                                + ", ".join(mols[:8]), "technical_failure", "observation", [e.id for e in failures],
+                                + ", ".join(mols[:8]), "technical_failure", "observation", task["failures"],
                                 [r for e in failures for r in e.prov_refs][:20], {"failure_class": fclass,
                                                                                   "motif": motif}, about)
-        if expl.get("explanation"):
-            eid, _ = self._diagnose("failure_explanation", key, f"Proposed explanation of the {fclass} failures of "
-                                    f"{what}: {_as_text(expl['explanation'])}", "technical_failure", "explanation",
-                                    [did], about=about)
-            for e in failures:
-                self.s.link(eid, e.id, "EXPLAINS", ME, "llm")
-        self._guide(f"Computations of {what} fail repeatedly with {fclass} ({', '.join(mols[:5])}). "
-                    + (_as_text(expl.get("advice")) or "Avoid similar molecules."), "technical_failure",
-                    "hypothesis" if expl else "observation", [did],
+        self._guide(f"Computations of {what} fail repeatedly with {fclass} ({', '.join(mols[:5])}). Avoid proposing "
+                    + (f"molecules with a {motif.replace('_', ' ')} group." if motif else "similar molecules."),
+                    "technical_failure", "observation", [did],
                     check={"failure_class": fclass, "motif": motif, "avoid_keys": mols})
-        self._store_procedure(key, fclass, motif, failures, draft)
+        self._defer("explain", diagnosis=did, **task)
+        if self.cfg.structured and self.s.r.sadd(self.s._k("analyzer", "drafting"), key):
+            self._defer("draft", **task)
+
+    def _task_explain(self, p: dict) -> None:
+        """A candidate explanation of a failure pattern (EXPLAINS edges of origin "llm")."""
+        failures = [e for e in (self.s.get(i) for i in p["failures"]) if e is not None]
+        motif, fclass = p["motif"], p["failure_class"]
+        context = self.investigate(motif_node(motif), 2, 20) if motif else ""
+        expl = self._llm_json(EXPLAIN_FAILURES, f"Error class: {fclass}\nMotif: {motif or 'none'}\n" + "\n".join(
+            f"{e.key}: {e.data['error'][:200]}" for e in failures[:10]) + (f"\nGraph context:\n{context}"
+                                                                            if context else ""))
+        if not expl.get("explanation"):
+            return
+        what = f"molecules with a {motif.replace('_', ' ')} group" if motif else "different molecules"
+        eid, new = self._diagnose("failure_explanation", p["key"], f"Proposed explanation of the {fclass} failures of "
+                                  f"{what}: {_as_text(expl['explanation'])}", "technical_failure", "explanation",
+                                  [p["diagnosis"]], about=self.s.motif(motif) if motif else None)
+        for e in failures:
+            self.s.link(eid, e.id, "EXPLAINS", ME, "llm")
+        if new and expl.get("advice"):
+            self._guide(_as_text(expl["advice"]), "technical_failure", "hypothesis", [eid])
+
+    def _task_draft(self, p: dict) -> None:
+        failures = [e for e in (self.s.get(i) for i in p["failures"]) if e is not None]
+        draft = self._draft_procedure(p["failure_class"], p["motif"], failures)
+        self.s.r.srem(self.s._k("analyzer", "drafting"), p["key"])       # an unusable draft may be asked again
+        self._store_procedure(p["key"], p["failure_class"], p["motif"], failures, draft)
 
     def _draft_procedure(self, fclass: str, motif: str | None, failures: list[Entry]) -> dict:
         """LLM draft of a procedure, given the failures and the team's knowledge about the motif (from the graph)."""
@@ -381,7 +422,6 @@ class Analyzer:
     # ================================================================== knowledge
     def _on_knowledge(self, p: dict) -> None:
         good, bad = verification.results(self.s)
-        measured = ", ".join(sorted({e.key for e in self.s.all("M1")}))[:3000]
         for kid in p.get("entries", []):
             k = self.s.get(kid)
             if k is None:
@@ -397,15 +437,25 @@ class Analyzer:
                         self._guide(f"Your statement \"{k.text}\" rests on an unreliable result ({m1.text}); "
                                     "reassess it.", "data_quality", "observation", [did], k.author)
             if self.cfg.structured and not self.s.get_verification(kid):
-                # deterministic first: a statement naming no molecule, number or motif fits no checkable form
-                claim = verification.normalize(self._llm_json(
-                    verification.extraction_prompt(), f"Statement: {k.text}\nMeasured molecules: {measured}")
-                ) if verification.could_be_checked(k.text) else {"form": "none"}
-                res = verification.check(claim, good, bad)
-                verification.record(self.s, kid, claim, res, "new statement")
-                if res["verdict"] == "contradicted":
-                    self._report_contradiction(k, res, "claim_contradicted", kid, k.author,
-                                               f"Your statement \"{k.text}\" is contradicted by the team's results")
+                if verification.could_be_checked(k.text):
+                    self._defer("verify", entry=kid)    # the LLM puts it in a checkable form, later
+                else:                                   # names no molecule, number or motif: fits no form
+                    claim = {"form": "none"}
+                    verification.record(self.s, kid, claim, verification.check(claim, good, bad), "new statement")
+
+    def _task_verify(self, p: dict) -> None:
+        k = self.s.get(p["entry"])
+        if k is None or self.s.get_verification(k.id):
+            return
+        measured = ", ".join(sorted({e.key for e in self.s.all("M1")}))[:3000]
+        claim = verification.normalize(self._llm_json(verification.extraction_prompt(),
+                                                      f"Statement: {k.text}\nMeasured molecules: {measured}"))
+        good, bad = verification.results(self.s)              # the results as they are now
+        res = verification.check(claim, good, bad)
+        verification.record(self.s, k.id, claim, res, "new statement")
+        if res["verdict"] == "contradicted":
+            self._report_contradiction(k, res, "claim_contradicted", k.id, k.author,
+                                       f"Your statement \"{k.text}\" is contradicted by the team's results")
 
     def _report_contradiction(self, k: Entry, res: dict, rule: str, key: str, target: str, lead: str,
                               extra: list[str] | None = None) -> None:
@@ -492,13 +542,21 @@ class Analyzer:
                                   if k is not None), "workflow", "observation", [did, pid])
 
     def _on_attempt(self, p: dict) -> None:
-        """Two consecutive iterations of an agent without improving its best result: advice from the LLM."""
+        """Two consecutive iterations of an agent without improving its best result: diagnosed now, advice from
+        the LLM later."""
         agent = p.get("agent", "")
         mine = sorted((e for e in self.s.by_key("M2", agent) if e.kind == "attempt"), key=lambda e: e.created_at)
         last = mine[-2:]
         if len(last) < 2 or any(e.data.get("improved") is not False for e in last) or self._fired(
                 "no_improvement", f"{agent}|{last[-1].id}"):
             return
+        did, _ = self._diagnose("no_improvement", f"{agent}|{last[-1].id}",
+                                f"{agent}: two consecutive iterations without improvement", "workflow",
+                                "observation", [e.id for e in last])
+        self._defer("advise", agent=agent, diagnosis=did, attempts=[e.id for e in last])
+
+    def _task_advise(self, p: dict) -> None:
+        last = [e for e in (self.s.get(i) for i in p["attempts"]) if e is not None]
         best = sorted((e for e in self.s.all("M1") if e.data.get("value") is not None),
                       key=lambda e: -e.data["value"])[:5]
         fails = [e.text for e in self.s.all("M2") if e.kind == "failure"][-5:]
@@ -506,11 +564,8 @@ class Analyzer:
         adv = self._llm_json(SUGGEST_DIRECTION, "Recent iterations:\n" + "\n".join(e.text for e in last)
                              + "\nTeam best results:\n" + "\n".join(e.text for e in best) + "\nFailures:\n"
                              + "\n".join(fails) + "\nKnowledge:\n" + "\n".join(know))
-        did, new = self._diagnose("no_improvement", f"{agent}|{last[-1].id}",
-                                  f"{agent}: two consecutive iterations without improvement", "workflow",
-                                  "observation", [e.id for e in last])
-        if new and adv.get("advice"):
-            self._guide(_as_text(adv["advice"]), "workflow", "hypothesis", [did], agent)
+        if adv.get("advice"):
+            self._guide(_as_text(adv["advice"]), "workflow", "hypothesis", [p["diagnosis"]], p["agent"])
 
     # ================================================================== provenance records
     def _on_provenance(self, rec: dict) -> None:
@@ -631,7 +686,8 @@ def main(argv: list[str] | None = None) -> None:
     an = Analyzer(store, cfg, source=source)
     if args.post:
         an.count_provenance = False              # reading the whole provenance again is not what was received online
-        an.step(block_ms=10, retry_idle_ms=0)    # finish pending memory events (and read the provenance) first
+        while an.step(block_ms=10, retry_idle_ms=0):   # finish pending events and LLM tasks, read the provenance
+            pass
         print("report:", write_report(an.post_execution(), args.out))
         return
     an.run_forever()
