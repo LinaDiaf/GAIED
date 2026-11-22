@@ -33,6 +33,7 @@ services:
       LLM_RPM: ${LLM_RPM:-}                       # API quota per minute and per day (shared, docker/local_llm.py)
       LLM_RPD: ${LLM_RPD:-}
       LLM_SEND_SEED: ${LLM_SEND_SEED:-true}
+      LLM_THINKING: ${LLM_THINKING:-minimal}
       LLM_SEND_TEMPERATURE: ${LLM_SEND_TEMPERATURE:-true}
       OLLAMA_URL: http://ollama:11434
       OLLAMA_MODEL: qwen3.5:4b          # qwen3.5:9b with 16 GB of RAM or more
@@ -72,6 +73,7 @@ services:
       LLM_RPM: ${LLM_RPM:-}                       # API quota per minute and per day (shared, docker/local_llm.py)
       LLM_RPD: ${LLM_RPD:-}
       LLM_SEND_SEED: ${LLM_SEND_SEED:-true}
+      LLM_THINKING: ${LLM_THINKING:-minimal}
       OLLAMA_URL: ${OLLAMA_URL:-http://ollama:11434}
       OLLAMA_MODEL: ${OLLAMA_MODEL:-qwen3.5:4b}
       OLLAMA_THINK: "false"

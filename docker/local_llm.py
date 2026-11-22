@@ -24,6 +24,8 @@ Environment variables:
   LLM_API_KEY    the key (put it in docker/.env, never in Git)
   LLM_SEND_TEMPERATURE  "true" (default); "false" for models that enforce it (e.g. some GPT-5)
   LLM_SEND_SEED  "true" (default): LLM_SEED is sent; switched off by itself if the API rejects it
+  LLM_THINKING   Gemini API only: thinking level of the model, "minimal" (default: answer without a long reasoning
+                 first, as Qwen runs with OLLAMA_THINK=false), "low", "high", or empty to leave the model's default
   LLM_SYSTEM_IN_USER  "false" (default): system messages are sent as such; switched on by itself if the model
                  refuses them (e.g. Gemma on the Gemini API)
   LLM_RPM, LLM_RPD  the provider's quota (requests per minute, per day) for this key: every process using the key
@@ -231,6 +233,10 @@ class OllamaLLM:
         payload["max_completion_tokens" if "api.openai.com" in base else "max_tokens"] = max_tokens
         if os.environ.get("LLM_SEND_TEMPERATURE", "true").lower() == "true":
             payload["temperature"] = self.temperature
+        thinking = os.environ.get("LLM_THINKING", "minimal").strip().lower()
+        if thinking and "generativelanguage.googleapis.com" in base:   # Gemini API: Gemini and Gemma models
+            payload["extra_body"] = {"google": {"thinking_config": {"thinking_level": thinking,
+                                                                    "include_thoughts": False}}}
         if os.environ.get("LLM_SEED") and os.environ.get("LLM_SEND_SEED", "true").lower() == "true":
             payload["seed"] = int(os.environ["LLM_SEED"])      # paired runs, where the provider accepts it
         limiter = RateLimiter.from_env(self.model)
@@ -254,6 +260,11 @@ class OllamaLLM:
                 log.warning("the API rejects the sampling seed: sending none (runs are not paired by seed)")
                 os.environ["LLM_SEND_SEED"] = "false"
                 payload.pop("seed")
+                continue
+            if resp.status_code == 400 and "extra_body" in payload and "think" in resp.text.lower():
+                log.warning("the model does not accept a thinking level: sending none (%s)", resp.text[:200])
+                os.environ["LLM_THINKING"] = ""
+                payload.pop("extra_body")
                 continue
             if resp.status_code == 400 and "instruction" in resp.text.lower() and \
                     any(m["role"] == "system" for m in payload["messages"]):
