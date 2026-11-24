@@ -61,7 +61,7 @@ def from_env(agent_name: str) -> "MemoryClient | None":
     if not cfg.enabled:
         return None
     store = MemoryStore.connect(cfg.redis_host, cfg.redis_port, cfg.namespace)
-    store.set_goal(cfg.goal, cfg.direction)
+    store.set_goal(cfg.goal)
     return MemoryClient(store, cfg, agent_name)
 
 
@@ -70,6 +70,7 @@ class MemoryClient:
         self.s, self.cfg, self.agent = store, cfg, agent
         self.emb = Embedder(store, cfg.embed_model, cfg.embed_url) if "semantic" in cfg.channels else None
         self.seed = agent.split("#")[0]          # GAIED names an agent after its seed molecule
+        self.goal = store.goal() or cfg.goal     # "best" and "improved" are judged against the campaign goal
         self.best: float | None = None          # this agent's best value, to describe each attempt's outcome
         self.iteration = 0
         self._results: list[str] = []           # this iteration: results computed, failures, results reused
@@ -192,7 +193,8 @@ class MemoryClient:
         return eid
 
     def _seen(self, value) -> None:
-        if isinstance(value, (int, float)) and (self.best is None or value > self.best):
+        if self.goal.measurable and isinstance(value, (int, float)) and (
+                self.best is None or self.goal.score(value) > self.goal.score(self.best)):
             self.best = float(value)
 
     # ------------------------------------------------------------------ conclusion
@@ -210,8 +212,7 @@ class MemoryClient:
         if ids:
             self.s.emit("knowledge", {"entries": ids, "agent": self.agent})
         before = self._best_start
-        improved = None if before is None and self.best is None else (
-            self.best is not None and (before is None or self.best > before))
+        improved = None if before is None and self.best is None else self.best != before   # best only moves forward
         aid, _ = self.s.add(attempt(
             f"{self.agent}, iteration {self.iteration}: {len(self._proposals)} proposed, {len(self._results)} "
             f"computed, {len(self._reused)} reused, {len(self._failures)} failed"
@@ -279,8 +280,7 @@ class MemoryClient:
         q = self.task_query(query)
         found, procs = self._found(q), self._procedures(q)
         shown = {e.id for e, _, _ in found["M1"]}
-        best = [e for e in sorted((e for e in self.s.all("M1") if e.data.get("value") is not None),
-                                  key=lambda e: -e.data["value"]) if e.id not in shown][:3]
+        best = [e for e in self.goal.ranked(self.s.all("M1")) if e.id not in shown][:3]
         d = lambda e: retrieval.describe(self.s, e)  # noqa: E731
         sections = [
             ("Results on molecules related to the current task (M1)", [d(e) for e, _, _ in found["M1"]]),

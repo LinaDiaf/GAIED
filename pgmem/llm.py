@@ -39,6 +39,14 @@ checked against measured values. Use exactly one of these forms, or "none" if th
 {"form": "none"}
 Use SMILES exactly as written in the statement or in the list of measured molecules. Answer with the JSON only."""
 
+GOAL_CHECK = """You check whether an agent of a scientific team still pursues the campaign goal given below.
+Read the agent's plan and conclusions of one iteration. The agent drifts when its own words show that it now pursues
+something else: the opposite direction, another target, a constraint of the goal ignored, a side question made its
+aim. A prediction that turns out wrong, a failed attempt, an exploration step or a hypothesis test that still serves
+the goal is not a drift. An observation about the agent's results may be given: it is not a drift by itself.
+If it drifts, copy the one sentence of the agent's text that shows it, exactly as written.
+Answer with ONLY a JSON object: {"aligned": true|false, "quote": "<the sentence, if not aligned>", "reason": "..."}"""
+
 _JSON = re.compile(r"\{.*\}", re.S)
 
 
@@ -93,6 +101,10 @@ def scripted(system: str, user: str) -> str:
             return json.dumps({"form": "bound", "molecule": m.group(1), "relation": m.group(2),
                                "value": float(m.group(3))})
         return json.dumps({"form": "none"})
+    if system == GOAL_CHECK:            # a plan line stating the lowest value as its aim is the scripted drift
+        m = re.search(r"^.*\blowest\b.*$", user.split("\n\n", 1)[-1], re.M)
+        return json.dumps({"aligned": False, "quote": m.group(0).strip(), "reason": "aims at the lowest value"}
+                          if m else {"aligned": True, "quote": "", "reason": "pursues the goal"})
     if system == SUGGEST_DIRECTION:
         return json.dumps({"advice": "Explore a different scaffold than the last iterations (scripted advice)."})
     if system == DRAFT_PROCEDURE:

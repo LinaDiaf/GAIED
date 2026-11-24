@@ -38,7 +38,7 @@ edge. Provenance stays in Flowcept: the memory refers to it, it never copies it.
 | `pgmem/provenance.py` | adapter to Flowcept (JSONL files, online channel) |
 | `pgmem/faults.py` | fault injection for the controlled evaluation |
 | `pgmem/show.py`, `pgmem/collect.py` | print a memory; zip a namespace's memory, events, provenance and reports |
-| `pgmem/goal.py` | read or set the campaign goal kept in the memory |
+| `pgmem/goal.py` | the campaign goal: its fields, the score of a result, the quote check; read or set it |
 
 ## Nodes
 
@@ -182,25 +182,44 @@ gave): scheduled sections at `plan`, `critique` and `update`; and the `query_mem
 
 ### Goal
 
-Each memory keeps the campaign goal (`goal`: the goal and its direction, `maximize` or `minimize`), written by the
-first agent or analysis agent that starts when the memory has none (`PGMEM_GOAL`, `PGMEM_DIRECTION`), or set by a
-human before the campaign (`python -m pgmem.goal set goal "..."`). It is for the analysis agent:
+Each memory keeps the campaign goal (`goal`, `pgmem/goal.py`): the goal in words (`text`, any goal: a property,
+constraints, an exploration aim) and, when it is about a measured quantity, a form the code can score results
+against: `quantity`, `direction` (`maximize`, `minimize` or `target`) and `target` (a value or an interval). Each
+field is written by the first agent or analysis agent that starts when the memory does not have it (`PGMEM_GOAL`,
+`PGMEM_GOAL_QUANTITY`, `PGMEM_DIRECTION`, `PGMEM_TARGET`), or set by a human before the campaign
+(`python -m pgmem.goal set text "..."`). The score of a result is its value, its opposite, or minus its distance to
+the target interval; an agent's best result and whether an iteration improved it, the best results shown to the
+agents and the advice prompt use it, so nothing assumes that higher is better.
+
+The goal is for the analysis agent:
 
 - it starts the prompts of its explanations, procedures and advice (`EXPLAIN_FAILURES`, `DRAFT_PROCEDURE`,
-  `SUGGEST_DIRECTION`), so that they serve the goal; not the extraction of a claim's form, which does not need it;
-- it is what the goal-drift rule checks the agents against (Analysis agent, below).
+  `SUGGEST_DIRECTION`), so that they serve it; not the extraction of a claim's form, which does not need it;
+- the agents are checked against it (goal drift, in the rules below).
 
 The agents do not receive it from the memory: they keep receiving their goal from GAIED's own prompt ("Look for
 molecules with high ionization energy"), in every condition, so the memory conditions add no information about the
 task that `off` lacks. `PGMEM_GOAL` must therefore describe the same goal as that prompt. Each attempt (M2) keeps
-excerpts of the iteration's plan and conclusions (1500 characters each), which the rule reads.
+excerpts of the iteration's plan and conclusions (1500 characters each).
 
-Goal drift is read without the LLM: a sentence in which the agent states an aim (first person, "goal:", "plan:", "in
-order to", a plan step) to move the target quantity against the goal's direction ("we will propose molecules with
-lower IE"). Predictions ("replacing F by Me should lower the IE"), observations ("CCO had the lowest IE"), tests of a
-hypothesis and negations are not aims; the quantity's names come from the domain interface (`quantity_terms`). On
-the LLM outputs of the two Qwen pilots (about 1,000 records) it fires twice, on plans whose objective is "the true
-global minimum IE". Its limit: an agent that drifts without writing it is not detected.
+Goal drift is judged in two steps, on two kinds of evidence:
+
+| Step | Evidence | By | Finding |
+|---|---|---|---|
+| results moving away from the goal | the scores of the agent's own new results: each of its last 3 iterations worse than the one before | code, when the goal is measurable | diagnosis `moving_away_from_goal` (observation) |
+| goal drift | the iteration's plan and conclusions read against the goal (with the observation above, if any) | LLM, every iteration | diagnosis `goal_drift` (hypothesis) and the goal recalled to the agent |
+
+The first step sees what happened, not why: results can move away from the goal because the agent stopped pursuing
+it, or because it pursues it with a wrong idea (a wrong chemical hypothesis is not drift; it is what the other rules
+and the advice address). The second step sees what the agent says it pursues, for any goal (another direction,
+another target, a constraint ignored), but it is an LLM judging an LLM: the drift it reports is kept only when the
+sentence it quotes is in the agent's own text, compared once case, markup, punctuation and spacing are set aside (a
+quote cut with "..." matches part by part, in order). No similarity threshold: embeddings place "lower the IE" and
+"raise the IE" close together, which is the very difference the check must keep. A reported drift whose quote is not
+found is counted (`goal_drift_unquoted`), not kept. A goal reminder is judged on the agent's next iteration: applied
+when that iteration no longer drifts, effective when its results score better than those of the iteration that
+drifted. Limits: a drift neither written nor visible in the results is not detected; with the LLM switched off only
+the first step runs.
 
 The agents never touch the graph: the code creates the nodes and edges. The lock: before computing a molecule an
 agent takes `claim:{molecule}` (Redis `SET NX`, expiring after `PGMEM_CLAIM_TTL_S`); another agent asking for the
@@ -225,7 +244,8 @@ procedure or advise a change of direction). It never rewrites an entry.
 | proposals | repeated proposals | | diagnosis; guidance to the agent |
 | attempt | guidance judgement | the attempt's `PART_OF` results and failures | `APPLIED_IN` edge: applied (none of the molecules or motif warned against proposed), effective (none recomputed, no new failure of the class) |
 | | procedure no longer effective | the procedure's applications; its `JUSTIFIED_BY` statements | diagnosis; guidance to every agent naming the statements it rests on |
-| | goal drift | the attempt's plan and conclusions | diagnosis quoting the sentence; guidance recalling the goal to that agent, unless it has one not yet received; judged applied when its next attempt no longer aims against the goal |
+| | results moving away from the goal | the scores of the agent's last 3 iterations | diagnosis (observation) |
+| | goal drift (LLM task, every iteration) | the attempt's plan and conclusions, the goal, the observation above | diagnosis quoting the agent, kept only if the quote is in its text; guidance recalling the goal, unless it has one not yet received; judged on its next iteration (applied: no drift; effective: results closer to the goal) |
 | | no improvement in two iterations | | diagnosis; advice to the agent |
 | provenance | redundant computation, LLM call without tool calls, task in error | Flowcept records | diagnoses |
 
@@ -278,7 +298,8 @@ process: the pool worker is a fork whose Flowcept buffer is never flushed), `[ga
 |---|---|---|
 | `PGMEM_MODE` | `off` | `off`, `basic`, `structured`, `full` |
 | `PGMEM_NAMESPACE` | `default` | memory namespace (a new one per experiment) |
-| `PGMEM_GOAL`, `PGMEM_DIRECTION` | `find molecules with high ionization energy`, `maximize` | the campaign goal, written in the memory if it has none (the same goal as GAIED's prompt) |
+| `PGMEM_GOAL` | `find molecules with high ionization energy` | the campaign goal in words, written in the memory if it has none (the same goal as GAIED's prompt) |
+| `PGMEM_GOAL_QUANTITY`, `PGMEM_DIRECTION`, `PGMEM_TARGET` | `ionization_energy`, `maximize`, none | the quantity the goal is about, `maximize` / `minimize` / `target`, and the target value or interval (`9,11`) |
 | `REDIS_HOST`, `REDIS_PORT` | `localhost`, `6379` | Redis server |
 | `PGMEM_RETRIEVAL_LIMIT` | `5` | entries per section of a prompt |
 | `PGMEM_CHANNELS` | `bm25,semantic,chem,graph` | retrieval channels (ablations) |

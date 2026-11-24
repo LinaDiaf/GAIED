@@ -26,8 +26,10 @@ def main(argv: list[str] | None = None) -> None:
     print(s.goal_text() or "no campaign goal recorded", end="\n\n")
     print(f"namespace {a.namespace}: " + ", ".join(f"{c}={s.count(c)}" for c in ("M1", "M2", "M3", "M4")))
     print("relations: " + ", ".join(f"{k}={v}" for k, v in sorted(s.graph.count_by_type().items())))
-    print("\nM1 results (best first)")
-    for e in sorted(s.all("M1"), key=lambda e: -(e.data.get("value") or float("-inf")))[:a.limit]:
+    goal = s.goal()
+    ranked = goal.ranked(s.all("M1")) if goal and goal.measurable else s.all("M1")
+    print("\nM1 results" + (" (closest to the goal first)" if goal and goal.measurable else ""))
+    for e in ranked[:a.limit]:
         print(f"  {describe(s, e)}  tasks={len(e.prov_refs)}  by {e.author}")
     print("\nM2 experiences")
     for e in s.all("M2")[-a.limit * 2:]:

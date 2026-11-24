@@ -178,6 +178,8 @@ def run_metrics(run_dir: str) -> dict:
     m["analyzer_event_seconds"] = round(float(x.stats.get("event_seconds", 0)), 2)
     tasks = int(float(x.stats.get("tasks", 0)))       # LLM work of the analysis agent, done after the rules
     m["analysis_llm_tasks"] = tasks
+    m["goal_checks"] = int(x.stats.get("goal_checks", 0))
+    m["goal_drift_unquoted"] = int(x.stats.get("goal_drift_unquoted", 0))   # reported by the LLM, quote not found
     m["analysis_task_wait_s"] = round(float(x.stats.get("task_wait_seconds", 0)) / tasks, 1) if tasks else None
     if "provenance_records" in x.stats:   # absent: not measured (no provenance source)
         expected = {r["task_id"] for r in records if r.get("task_id") and is_relevant(r)}
@@ -254,7 +256,9 @@ def run_metrics(run_dir: str) -> dict:
         m["confirmed_cause_correct"] = (sum(1 for d in confirmed if not chem.parses(d["key"])) / len(confirmed)
                                         if confirmed else None)
         m["procedure_ineffective_detected"] = bool(by_rule["procedure_no_longer_effective"])
-        m["goal_drift_detected"] = len(by_rule["goal_drift"])     # no ground truth: read with the quoted sentences
+        # no ground truth for goal drift: read with the sentences the diagnoses quote
+        m["goal_drift_detected"] = len(by_rule["goal_drift"])
+        m["moving_away_detected"] = len(by_rule["moving_away_from_goal"])
         for rule, v in acc.items():
             for k in ("truth", "detected", "precision", "recall"):
                 m[f"diag_{rule}_{k}"] = v[k]

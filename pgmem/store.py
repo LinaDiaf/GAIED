@@ -9,7 +9,7 @@ The shared persistent memory in Redis (already part of GAIED's deployment). One 
   verification       verdicts of statements and diagnoses, by entry id (pgmem/verification.py)
   emb                embeddings of entries, by entry id (semantic retrieval)
   g:{id}, gq         guidance and its index; gseen:{agent}: guidance already delivered to that agent
-  goal               the campaign goal and its direction, for the analysis agent (hash)
+  goal               the campaign goal, for the analysis agent (hash, pgmem/goal.py)
   events             stream of memory events, read by the analysis agent (consumer group, acknowledged)
 """
 from __future__ import annotations
@@ -18,8 +18,8 @@ import json
 from contextlib import contextmanager
 import redis
 
-from .config import DIRECTIONS
 from .domain import DOMAIN
+from .goal import FIELDS as GOAL_FIELDS, Goal
 from .graph import GraphStore, node_type
 from .schema import CATEGORIES, Entry, Guidance, molecule_node, motif_node, now
 
@@ -28,7 +28,6 @@ def normalize(text: str) -> str:
     return " ".join((text or "").lower().split()).strip(" .")
 
 
-GOAL_FIELDS = ("goal", "direction")
 
 
 class MemoryStore:
@@ -57,28 +56,26 @@ class MemoryStore:
                 pass
 
     # ------------------------------------------------------------------ goal
-    def set_goal(self, goal: str, direction: str) -> None:
-        """The campaign goal (one per namespace), written only if absent: the first process that starts, or a human
-        (python -m pgmem.goal set), decides it."""
-        for f, v in (("goal", goal), ("direction", direction)):
-            if v:
-                self.r.hsetnx(self._k("goal"), f, v)
+    def set_goal(self, goal: Goal) -> None:
+        """The campaign goal (one per namespace). Each field is written only if absent: the first process that
+        starts, or a human before the campaign (python -m pgmem.goal set), decides it."""
+        for f, v in goal.to_fields().items():
+            self.r.hsetnx(self._k("goal"), f, v)
 
     def update_goal(self, field: str, value: str) -> None:
-        """A human edit of the goal."""
+        """A human edit of the goal, checked before it is written."""
         if field not in GOAL_FIELDS:
             raise ValueError(f"goal field must be one of {GOAL_FIELDS}")
-        if field == "direction" and value not in DIRECTIONS:
-            raise ValueError(f"direction must be one of {DIRECTIONS}")
+        Goal.from_fields({"text": "-", **self.r.hgetall(self._k("goal")), field: value})   # raises if invalid
         self.r.hset(self._k("goal"), field, value)
 
-    def goal(self) -> dict:
-        return self.r.hgetall(self._k("goal"))
+    def goal(self) -> Goal | None:
+        return Goal.from_fields(self.r.hgetall(self._k("goal")))
 
     def goal_text(self) -> str:
         """The goal as a line for the analysis agent's prompts ("" if none is recorded)."""
         g = self.goal()
-        return f"Campaign goal: {g['goal']} ({g.get('direction', 'maximize')} the target quantity)" if g.get("goal") else ""
+        return g.describe() if g else ""
 
     # ------------------------------------------------------------------ nodes
     def exists(self, node: str) -> bool:
@@ -218,7 +215,7 @@ class MemoryStore:
     # ------------------------------------------------------------------ maintenance
     def export(self) -> dict:
         return {"namespace": self.ns,
-                "goal": self.goal(),
+                "goal": self.r.hgetall(self._k("goal")),
                 "entries": {c: [e.to_dict() for e in self.all(c)] for c in CATEGORIES},
                 "edges": self.graph.all(),
                 "guidance": [g.to_dict() for g in self.all_guidance()],

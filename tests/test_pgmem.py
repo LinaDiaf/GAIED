@@ -481,7 +481,8 @@ def test_statements_that_fit_no_form_are_not_sent_to_the_llm():
                   {"statement": "The ionization energy of CCO is above 9.0 eV", "epistemic_status": "observation"}])
     drain(an)
     recs = s.all_verifications()
-    assert int(s.r.hget(s._k("analyzer", "stats"), "llm_calls")) == 1 and len(recs) == 2
+    stats = s.r.hgetall(s._k("analyzer", "stats"))
+    assert int(stats["llm_calls"]) - int(stats.get("goal_checks", 0)) == 1 and len(recs) == 2   # one claim form
     assert sorted(r["claim"]["form"] for r in recs.values()) == ["bound", "none"]
 
 
@@ -551,9 +552,10 @@ def test_fault_selection_is_deterministic_and_the_scenarios_hide_the_injection()
 
 def test_goal_is_written_once_and_starts_the_analysis_prompts_but_not_the_agents():
     cfg, store, _ = setup()
-    store.update_goal("goal", "raise the ionization energy")              # set by a human before the campaign
-    store.set_goal(cfg.goal, cfg.direction)                               # the agents do not replace it
-    assert store.goal() == {"goal": "raise the ionization energy", "direction": "maximize"}
+    store.update_goal("text", "raise the ionization energy")              # set by a human before the campaign
+    store.set_goal(cfg.goal)                                              # the agents do not replace it
+    g = store.goal()
+    assert (g.text, g.quantity, g.direction) == ("raise the ionization energy", "ionization_energy", "maximize")
     a = client(store, cfg, "CCO#1")
     a.record_result("CCO", 15.0, OK, "t1", "w1", "c1")
     assert "raise the ionization energy" not in a.context("plan", "CCO")   # agents keep GAIED's own prompt
@@ -567,44 +569,75 @@ def test_goal_is_written_once_and_starts_the_analysis_prompts_but_not_the_agents
     an = Analyzer(store, cfg, llm=Spy())
     an._llm_json("system", "Recent iterations: none")
     an._llm_json("system", "Statement: x", with_goal=False)              # the extraction of a claim's form
-    assert Spy.users[0].startswith("Campaign goal: raise the ionization energy (maximize")
+    assert Spy.users[0].startswith("Campaign goal: raise the ionization energy (maximize ionization_energy)")
     assert Spy.users[1] == "Statement: x"
 
 
-def test_aims_against_the_goal_are_told_from_predictions_observations_and_tests():
-    from pgmem.analyzer import aims_against
-    drift = ["Our goal is to minimize the ionization energy of the candidates.",
-             "Next, I will propose molecules with lower IE to explore the trend.",
-             "Plan: find the molecule with the lowest ionization energy.",
-             "- Propose analogues with a lower ionization energy",
-             "We need to reduce the IE further."]
-    fine = ["Fluorine tends to lower the ionization energy.", "CCO had the lowest ionization energy so far.",
-            "We should avoid groups that lower the IE.", "We will lower the HOMO energy to raise the IE.",
-            "Look for molecules with high ionization energy.", "Our goal is not to reduce the ionization energy.",
-            "Replacing F by Me should indeed lower the IE.", "Will it lower IE relative to F?",
-            "*Objective:* Test the hypothesis that heavier halogens reduce IE.", "I will maximize the IE."]
-    assert all(aims_against(t, "maximize") for t in drift)
-    assert not any(aims_against(t, "maximize") for t in fine)
-    assert aims_against("I will maximize the IE.", "minimize")
+def test_goal_scores_any_direction_and_quotes_are_matched_without_threshold():
+    from pgmem.goal import Goal, quoted_in
+    t = Goal("an ionization energy between 9 and 11 eV", "ionization_energy", "target", (9.0, 11.0))
+    assert t.score(10.0) == 0 and t.score(12.0) == -1 and t.score(8.5) == -0.5
+    assert Goal("low", "ionization_energy", "minimize").score(3.0) > Goal("low", "ionization_energy", "minimize").score(4.0)
+    assert not Goal("explore diverse scaffolds").measurable
+    cfg, store, _ = setup()
+    try:
+        store.update_goal("direction", "upwards")
+        raise AssertionError("an invalid direction was accepted")
+    except ValueError:
+        pass
+    plan = "**Objective:** To determine the true global minimum Ionization Energy (IE) for our series, by tautomers."
+    assert quoted_in("Objective: To determine the true global minimum Ionization Energy (IE)", plan)   # markup
+    assert quoted_in("determine the true global minimum ... for our series", plan)                    # cut quote
+    assert not quoted_in("determine the true global maximum Ionization Energy", plan)                # one word
+    assert not quoted_in("IE", plan)                                                                  # too short
 
 
-def test_goal_drift_is_diagnosed_and_the_goal_recalled_until_the_agent_follows_it():
+def _iteration(c, smiles_values, plan="Plan: continue."):
+    c.record_proposals([sm for sm, _ in smiles_values])
+    for i, (sm, v) in enumerate(smiles_values):
+        c.record_result(sm, v, OK, f"t-{sm}-{i}", "w1", "c1")
+    c.record_conclusion("Conclusions.", plan, None)
+
+
+def test_results_moving_away_from_the_goal_are_observed_in_its_direction():
+    for direction, expected in (("maximize", 1), ("minimize", 0)):
+        cfg, s, an = setup()
+        s.update_goal("direction", direction)
+        s.set_goal(cfg.goal)
+        a1 = client(s, cfg, "a1")
+        for sm, v in (("CCO", 12.0), ("CCCO", 11.0), ("CCCCO", 10.0)):    # each iteration lower than the one before
+            _iteration(a1, [(sm, v)])
+        drain(an)
+        assert len(diagnoses(s, "moving_away_from_goal")) == expected, direction
+        assert not diagnoses(s, "goal_drift")                       # the plans pursue the goal: no drift
+
+
+def test_goal_drift_needs_a_quote_from_the_agent_and_is_judged_on_the_next_iteration():
     cfg, s, an = setup()
     a1 = client(s, cfg, "a1")
-    a1.record_proposals(["CCO"])
-    a1.record_conclusion("Conclusions.", "Plan: find the molecule with the lowest ionization energy.", None)
-    a1.record_proposals(["CCC"])
-    a1.record_conclusion("Conclusions.", "Plan: lower the IE again.", None)       # not yet received: no new one
+    _iteration(a1, [("CCO", 12.0)], "Plan: find the molecule with the lowest ionization energy.")
+    _iteration(a1, [("CCCO", 11.0)], "Plan: keep the lowest values.")      # not yet received: no second reminder
     drain(an)
-    assert len(diagnoses(s, "goal_drift")) == 2
-    gs = [g for g in s.all_guidance() if g.check.get("goal")]
+    d = diagnoses(s, "goal_drift")
+    assert len(d) == 2 and all(x.data["epistemic_status"] == "hypothesis" for x in d)
+    gs = [g for g in s.all_guidance() if g.check.get("goal_drift")]
     assert len(gs) == 1 and gs[0].target == "a1" and "lowest ionization energy" in gs[0].message
     a1.context("plan", "CCO")                                                    # delivered
-    a1.record_proposals(["CCCC"])
-    a1.record_conclusion("Conclusions.", "Plan: propose molecules with a higher ionization energy.", None)
+    _iteration(a1, [("CCCCO", 13.0)], "Plan: propose molecules with a higher ionization energy.")
     drain(an)
     judged = [e["props"] for e in s.graph.outgoing(gs[0].id, ["APPLIED_IN"])]
-    assert len(judged) == 1 and judged[0]["applied"] is True and judged[0]["effective"] is None
+    assert judged == [{"agent": "a1", "applied": True, "effective": True}]
+
+
+def test_a_drift_whose_quote_is_not_in_the_agent_text_is_not_kept():
+    class Inventing:
+        def ask_json(self, system, user):
+            return {"aligned": False, "quote": "we now minimize the ionization energy", "reason": "-"}
+    cfg, s, an = setup(llm=Inventing())
+    _iteration(client(s, cfg, "a1"), [("CCO", 12.0)], "Plan: propose molecules with a higher ionization energy.")
+    drain(an)
+    assert not diagnoses(s, "goal_drift") and not [g for g in s.all_guidance() if g.check.get("goal_drift")]
+    assert s.r.hget(an.stats_key, "goal_drift_unquoted") == "1"
 
 
 TESTS = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
