@@ -33,8 +33,6 @@ import sys
 from collections import Counter, defaultdict
 
 from pgmem import chem
-from pgmem.config import Config
-from pgmem.goal import Goal
 from pgmem.provenance import as_dict, as_float, is_relevant, smiles_of
 
 def load_jsonl(path: str) -> list[dict]:
@@ -78,9 +76,6 @@ class Export:
         self.guidance = mem.get("guidance", [])
         self.verification = mem.get("verification") or {}
         self.stats = mem.get("analyzer_stats") or {}
-        # the campaign goal; a run without a memory ("off") has none: the default goal, the same for every run
-        goal = Goal.from_fields(mem.get("goal") or {}) or Config.from_env().goal
-        self.rank = goal.score if goal.measurable else None    # None: no "closest to the goal", the highest value
 
     def of(self, category: str, kind: str | None = None) -> list[dict]:
         return [e for e in self.entries.values() if e["category"] == category and (kind is None or e["kind"] == kind)]
@@ -164,9 +159,8 @@ def run_metrics(run_dir: str) -> dict:
         "repeated_failures": repeated_failures,
         "proposals": len(proposals), "proposals_already_known": len(late),
         "valid_results": len(values), "valid_distinct_molecules": len({k for k, _ in values}),
-        # the value closest to the campaign goal (the highest one when the goal is to maximize)
-        "best_value_reported": max((v for _, v in values), key=x.rank, default=None),
-        "best_value_true": max((v - offsets.get(k, 0.0) for k, v in values), key=x.rank, default=None),
+        "best_value_reported": max((v for _, v in values), default=None),
+        "best_value_true": max((v - offsets.get(k, 0.0) for k, v in values), default=None),
         "agent_llm_calls": sum(1 for t in tasks.values() if t.get("subtype") == "llm_call"),
         "faults_injected": len(faults), "computations_logged": len(computation_log),
     })

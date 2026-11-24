@@ -38,7 +38,7 @@ edge. Provenance stays in Flowcept: the memory refers to it, it never copies it.
 | `pgmem/provenance.py` | adapter to Flowcept (JSONL files, online channel) |
 | `pgmem/faults.py` | fault injection for the controlled evaluation |
 | `pgmem/show.py`, `pgmem/collect.py` | print a memory; zip a namespace's memory, events, provenance and reports |
-| `pgmem/goal.py` | the campaign goal: its fields, the score of a result, the quote check; read or set it |
+| `pgmem/goal.py` | the campaign goal, what "better" means for a result, the quote check; read or set the goal |
 
 ## Nodes
 
@@ -182,18 +182,12 @@ gave): scheduled sections at `plan`, `critique` and `update`; and the `query_mem
 
 ### Goal
 
-Each memory keeps the campaign goal (`goal`, `pgmem/goal.py`): the goal in words (`text`, any goal: a property,
-constraints, an exploration aim) and, when it is about a measured quantity, a form the code can score results
-against: `quantity`, `direction` (`maximize`, `minimize` or `target`) and `target` (a value or an interval). Each
-field is written by the first agent or analysis agent that starts when the memory does not have it (`PGMEM_GOAL`,
-`PGMEM_GOAL_QUANTITY`, `PGMEM_DIRECTION`, `PGMEM_TARGET`), or set by a human before the campaign
-(`python -m pgmem.goal set text "..."`). The score of a result is its value, its opposite, or minus its distance to
-the target interval. It decides what "best" means everywhere, so nothing assumes that higher is better: the
-attempt's `best_before`, `best_after` and `improved` (M2), hence the no-improvement rule and the attempts shown to
-the agents; the best results shown to the agents and given to the advice prompt; the iteration scores of the
-moving-away rule and of the judgement of goal reminders; the best value of the evaluation metrics. Without a
-measurable goal on the measured quantity there is no "better": `improved` stays empty and those rules do not fire.
-The goal is fixed for a campaign (agents read it when they start): set it before the campaign, not during it.
+Each memory keeps the campaign goal as a text (`goal`, `pgmem/goal.py`), written by the first agent or analysis
+agent that starts when the memory has none (`PGMEM_GOAL`), or set by a human before the campaign
+(`python -m pgmem.goal set "..."`). The goal is fixed for a campaign. What "better" means for a result is defined
+in one place, `goal.score` (the campaign maximizes the measured quantity): the attempt's `best_before`,
+`best_after` and `improved` (M2), the best results shown to the agents and to the advice prompt, and the scores of
+the moving-away rule all go through it, so another objective changes that function only.
 
 The goal is for the analysis agent:
 
@@ -210,7 +204,7 @@ Goal drift is judged in two steps, on two kinds of evidence:
 
 | Step | Evidence | By | Finding |
 |---|---|---|---|
-| results moving away from the goal | the scores of the agent's own new results: each of its last 3 iterations worse than the one before | code, when the goal is measurable | diagnosis `moving_away_from_goal` (observation) |
+| results moving away from the goal | the scores of the agent's own new results: each of its last 3 iterations worse than the one before | code | diagnosis `moving_away_from_goal` (observation) |
 | goal drift | the iteration's plan and conclusions read against the goal (with the observation above, if any) | LLM, every iteration | diagnosis `goal_drift` (hypothesis) and the goal recalled to the agent |
 
 The first step sees what happened, not why: results can move away from the goal because the agent stopped pursuing
@@ -302,8 +296,7 @@ process: the pool worker is a fork whose Flowcept buffer is never flushed), `[ga
 |---|---|---|
 | `PGMEM_MODE` | `off` | `off`, `basic`, `structured`, `full` |
 | `PGMEM_NAMESPACE` | `default` | memory namespace (a new one per experiment) |
-| `PGMEM_GOAL` | `find molecules with high ionization energy` | the campaign goal in words, written in the memory if it has none (the same goal as GAIED's prompt) |
-| `PGMEM_GOAL_QUANTITY`, `PGMEM_DIRECTION`, `PGMEM_TARGET` | `ionization_energy`, `maximize`, none | the quantity the goal is about, `maximize` / `minimize` / `target`, and the target value or interval (`9,11`) |
+| `PGMEM_GOAL` | `find molecules with high ionization energy` | the campaign goal, written in the memory if it has none (the same goal as GAIED's prompt) |
 | `REDIS_HOST`, `REDIS_PORT` | `localhost`, `6379` | Redis server |
 | `PGMEM_RETRIEVAL_LIMIT` | `5` | entries per section of a prompt |
 | `PGMEM_CHANNELS` | `bm25,semantic,chem,graph` | retrieval channels (ablations) |
@@ -335,7 +328,7 @@ docker compose --profile analysis run -d --rm --no-deps --name pgmem-analyzer -e
 docker compose run --rm --no-deps -e PGMEM_MODE=full -e PGMEM_NAMESPACE=run1 -e "SEEDS=CNC(N)=O,CNC(N)=O" -e MAX_ITERATIONS=3 gaied
 # memory, post-execution report, shareable zip
 docker compose run --rm --no-deps -e PGMEM_NAMESPACE=run1 gaied python -m pgmem.show
-docker compose run --rm --no-deps -e PGMEM_NAMESPACE=run1 gaied python -m pgmem.goal   # or: set goal "..."
+docker compose run --rm --no-deps -e PGMEM_NAMESPACE=run1 gaied python -m pgmem.goal   # or: set "..."
 docker compose run --rm --no-deps -e PGMEM_NAMESPACE=run1 analyzer python -m pgmem.analyzer --post
 docker stop pgmem-analyzer
 docker compose run --rm --no-deps gaied python -m pgmem.collect --namespace run1

@@ -47,7 +47,7 @@ import redis
 from . import chem, verification
 from .config import Config
 from .domain import DOMAIN
-from .goal import Goal, quoted_in
+from .goal import quoted_in, ranked, score
 from .llm import DRAFT_PROCEDURE, EXPLAIN_FAILURES, GOAL_CHECK, SUGGEST_DIRECTION, AnalysisLLM
 from .provenance import ProvenanceIndex, as_dict, is_computation, make_source, smiles_of
 from .retrieval import describe, procedure_history, unreliable
@@ -574,22 +574,19 @@ class Analyzer:
                                 "observation", [e.id for e in last])
         self._defer("advise", agent=agent, diagnosis=did, attempts=[e.id for e in last])
 
-    def _goal(self) -> Goal:
+    def _goal(self) -> str:
         return self.s.goal() or self.cfg.goal
 
     def _score(self, a: Entry) -> float | None:
         """How close an iteration's own new results are to the goal: the mean of their scores (None without any)."""
-        goal = self._goal()
         part = [self.s.get(e["source"]) for e in self.g.incoming(a.id, ["PART_OF"])]
-        scores = [goal.score(e.data["value"]) for e in goal.ranked([e for e in part if e is not None])]
+        scores = [score(e.data["value"]) for e in ranked([e for e in part if e is not None and e.category == "M1"])]
         return sum(scores) / len(scores) if scores else None
 
     def _moving_away(self, a: Entry) -> str | None:
         """Results moving away from the goal: each of the agent's last TREND_ITERATIONS iterations with results
         scored worse than the one before. An observation on the numbers alone; whether the agent stopped pursuing
         the goal or pursues it with a wrong idea is for the reading of its plan. Returns the diagnosis id."""
-        if not self._goal().measurable:
-            return None
         mine = sorted((e for e in self.s.by_key("M2", a.author) if e.kind == "attempt" and e.created_at <= a.created_at),
                       key=lambda e: e.created_at)
         scored = [(e, s) for e in mine if (s := self._score(e)) is not None][-TREND_ITERATIONS:]
@@ -611,7 +608,7 @@ class Analyzer:
             return
         goal, text = self._goal(), _intent(a)
         away = f"\nObservation: {self.s.get(p['moving_away']).text}" if p.get("moving_away") else ""
-        ans = self._llm_json(GOAL_CHECK, f"{goal.describe()}{away}\n\nAgent {a.author}, iteration "
+        ans = self._llm_json(GOAL_CHECK, f"Campaign goal: {goal}{away}\n\nAgent {a.author}, iteration "
                              f"{a.data.get('iteration')}:\n{text}", with_goal=False)
         if not isinstance(ans.get("aligned"), bool):
             return                               # unusable answer: nothing decided (logged by the LLM client)
@@ -628,7 +625,7 @@ class Analyzer:
                                   [a.id] + ([p["moving_away"]] if p.get("moving_away") else []))
         if new and not any(g.check.get("goal_drift") for g in self.s.pending_guidance(a.author)):
             self._guide(f"Your plan or conclusions say: \"{quote}\". This may go against the campaign goal: "
-                        f"{goal.text}. Choose your next molecules for that goal.", "workflow", "hypothesis", [did],
+                        f"{goal}. Choose your next molecules for that goal.", "workflow", "hypothesis", [did],
                         a.author, {"goal_drift": a.id})
 
     def _judge_goal_reminders(self, a: Entry, drift: bool) -> None:
@@ -648,7 +645,7 @@ class Analyzer:
 
     def _task_advise(self, p: dict) -> None:
         last = [e for e in (self.s.get(i) for i in p["attempts"]) if e is not None]
-        best = self._goal().ranked(self.s.all("M1"))[:5]
+        best = ranked(self.s.all("M1"))[:5]
         fails = [e.text for e in self.s.all("M2") if e.kind == "failure"][-5:]
         know = [describe(self.s, e) for e in self.s.recent("M3", self.cfg.retrieval_limit)]
         adv = self._llm_json(SUGGEST_DIRECTION, "Recent iterations:\n" + "\n".join(e.text for e in last)

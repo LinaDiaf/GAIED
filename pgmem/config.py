@@ -2,9 +2,7 @@
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass, field
-
-from .goal import Goal, parse_target
+from dataclasses import dataclass
 
 MODES = ("off", "basic", "structured", "full")
 # the goal GAIED gives its agents in their own prompt ("Look for molecules with high ionization energy"); the memory
@@ -37,7 +35,7 @@ class Config:
     redis_host: str = "localhost"
     redis_port: int = 6379
     campaign_id: str | None = None
-    goal: Goal = field(default_factory=lambda: Goal(DEFAULT_GOAL, "ionization_energy", "maximize"))
+    goal: str = DEFAULT_GOAL                # the campaign goal, kept in the memory for the analysis agent
     retrieval_limit: int = 5                # entries per section of a prompt (prompt size, not a scientific rule)
     channels: tuple = CHANNELS              # retrieval channels fused by RRF (pgmem/retrieval.py)
     embed_model: str = "nomic-embed-text"   # Ollama embedding model of the semantic channel
@@ -75,10 +73,7 @@ class Config:
             redis_host=os.environ.get("REDIS_HOST", "localhost"),
             redis_port=int(os.environ.get("REDIS_PORT", "6379")),
             campaign_id=os.environ.get("FLOWCEPT_CAMPAIGN_ID"),
-            goal=Goal(os.environ.get("PGMEM_GOAL", DEFAULT_GOAL),
-                      os.environ.get("PGMEM_GOAL_QUANTITY", "ionization_energy") or None,
-                      os.environ.get("PGMEM_DIRECTION", "maximize").strip().lower() or None,
-                      parse_target(os.environ.get("PGMEM_TARGET"))),
+            goal=os.environ.get("PGMEM_GOAL", DEFAULT_GOAL),
             retrieval_limit=int(os.environ.get("PGMEM_RETRIEVAL_LIMIT", "5")),
             channels=_list("PGMEM_CHANNELS", CHANNELS, CHANNELS),
             embed_model=os.environ.get("PGMEM_EMBED_MODEL", "nomic-embed-text"),

@@ -552,10 +552,9 @@ def test_fault_selection_is_deterministic_and_the_scenarios_hide_the_injection()
 
 def test_goal_is_written_once_and_starts_the_analysis_prompts_but_not_the_agents():
     cfg, store, _ = setup()
-    store.update_goal("text", "raise the ionization energy")              # set by a human before the campaign
+    store.update_goal("raise the ionization energy")                      # set by a human before the campaign
     store.set_goal(cfg.goal)                                              # the agents do not replace it
-    g = store.goal()
-    assert (g.text, g.quantity, g.direction) == ("raise the ionization energy", "ionization_energy", "maximize")
+    assert store.goal() == "raise the ionization energy"
     a = client(store, cfg, "CCO#1")
     a.record_result("CCO", 15.0, OK, "t1", "w1", "c1")
     assert "raise the ionization energy" not in a.context("plan", "CCO")   # agents keep GAIED's own prompt
@@ -569,22 +568,12 @@ def test_goal_is_written_once_and_starts_the_analysis_prompts_but_not_the_agents
     an = Analyzer(store, cfg, llm=Spy())
     an._llm_json("system", "Recent iterations: none")
     an._llm_json("system", "Statement: x", with_goal=False)              # the extraction of a claim's form
-    assert Spy.users[0].startswith("Campaign goal: raise the ionization energy (maximize ionization_energy)")
+    assert Spy.users[0].startswith("Campaign goal: raise the ionization energy\n\n")
     assert Spy.users[1] == "Statement: x"
 
 
-def test_goal_scores_any_direction_and_quotes_are_matched_without_threshold():
-    from pgmem.goal import Goal, quoted_in
-    t = Goal("an ionization energy between 9 and 11 eV", "ionization_energy", "target", (9.0, 11.0))
-    assert t.score(10.0) == 0 and t.score(12.0) == -1 and t.score(8.5) == -0.5
-    assert Goal("low", "ionization_energy", "minimize").score(3.0) > Goal("low", "ionization_energy", "minimize").score(4.0)
-    assert not Goal("explore diverse scaffolds").measurable
-    cfg, store, _ = setup()
-    try:
-        store.update_goal("direction", "upwards")
-        raise AssertionError("an invalid direction was accepted")
-    except ValueError:
-        pass
+def test_quotes_are_matched_without_threshold():
+    from pgmem.goal import quoted_in
     plan = "**Objective:** To determine the true global minimum Ionization Energy (IE) for our series, by tautomers."
     assert quoted_in("Objective: To determine the true global minimum Ionization Energy (IE)", plan)   # markup
     assert quoted_in("determine the true global minimum ... for our series", plan)                    # cut quote
@@ -599,31 +588,14 @@ def _iteration(c, smiles_values, plan="Plan: continue."):
     c.record_conclusion("Conclusions.", plan, None)
 
 
-def test_best_and_improved_of_an_attempt_follow_the_goal():
-    for fields, best, improved in (({"direction": "minimize"}, 10.0, [True, True, False]),
-                                   ({"direction": "target", "target": "11,12"}, 11.5, [True, True, False]),
-                                   ({"quantity": "homo_energy"}, None, [None, None, None])):   # not this quantity
-        cfg, s, _ = setup()
-        for f, v in fields.items():
-            s.update_goal(f, v)
-        s.set_goal(cfg.goal)
-        a1 = client(s, cfg, "a1")
-        for sm, v in (("CCO", 13.0), ("CCCO", 11.5) if "target" in fields else ("CCCO", 10.0), ("CCCCO", 14.0)):
-            _iteration(a1, [(sm, v)])
-        att = sorted((e for e in s.all("M2") if e.kind == "attempt"), key=lambda e: e.created_at)
-        assert a1.best == best and [e.data["improved"] for e in att] == improved, fields
-
-
-def test_results_moving_away_from_the_goal_are_observed_in_its_direction():
-    for direction, expected in (("maximize", 1), ("minimize", 0)):
+def test_results_moving_away_from_the_goal_are_observed():
+    for values, expected in (((12.0, 11.0, 10.0), 1), ((12.0, 10.0, 11.0), 0)):   # three drops in a row, or not
         cfg, s, an = setup()
-        s.update_goal("direction", direction)
-        s.set_goal(cfg.goal)
         a1 = client(s, cfg, "a1")
-        for sm, v in (("CCO", 12.0), ("CCCO", 11.0), ("CCCCO", 10.0)):    # each iteration lower than the one before
+        for sm, v in zip(("CCO", "CCCO", "CCCCO"), values):
             _iteration(a1, [(sm, v)])
         drain(an)
-        assert len(diagnoses(s, "moving_away_from_goal")) == expected, direction
+        assert len(diagnoses(s, "moving_away_from_goal")) == expected, values
         assert not diagnoses(s, "goal_drift")                       # the plans pursue the goal: no drift
 
 

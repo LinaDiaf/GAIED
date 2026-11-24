@@ -28,6 +28,7 @@ from . import chem, retrieval
 from .config import Config
 from .domain import DOMAIN
 from .embeddings import Embedder
+from .goal import ranked, score
 from .schema import EPISTEMIC_STATUS, ProvRef, attempt, failure, knowledge, result
 from .store import MemoryStore
 
@@ -70,10 +71,6 @@ class MemoryClient:
         self.s, self.cfg, self.agent = store, cfg, agent
         self.emb = Embedder(store, cfg.embed_model, cfg.embed_url) if "semantic" in cfg.channels else None
         self.seed = agent.split("#")[0]          # GAIED names an agent after its seed molecule
-        # "best" and "improved" are judged against the campaign goal, read once: the goal is fixed for a campaign.
-        # Without a measurable goal on this quantity there is no "better": best stays None and improved None.
-        goal = store.goal() or cfg.goal
-        self._rank = goal.score if goal.measurable and goal.quantity == QUANTITY else None
         self.best: float | None = None          # this agent's best value, to describe each attempt's outcome
         self.iteration = 0
         self._results: list[str] = []           # this iteration: results computed, failures, results reused
@@ -196,8 +193,7 @@ class MemoryClient:
         return eid
 
     def _seen(self, value) -> None:
-        if self._rank is not None and isinstance(value, (int, float)) and (
-                self.best is None or self._rank(value) > self._rank(self.best)):
+        if isinstance(value, (int, float)) and (self.best is None or score(value) > score(self.best)):
             self.best = float(value)
 
     # ------------------------------------------------------------------ conclusion
@@ -283,7 +279,7 @@ class MemoryClient:
         q = self.task_query(query)
         found, procs = self._found(q), self._procedures(q)
         shown = {e.id for e, _, _ in found["M1"]}
-        best = [e for e in (self.s.goal() or self.cfg.goal).ranked(self.s.all("M1")) if e.id not in shown][:3]
+        best = [e for e in ranked(self.s.all("M1")) if e.id not in shown][:3]
         d = lambda e: retrieval.describe(self.s, e)  # noqa: E731
         sections = [
             ("Results on molecules related to the current task (M1)", [d(e) for e, _, _ in found["M1"]]),
