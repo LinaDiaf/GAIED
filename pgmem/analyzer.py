@@ -8,7 +8,8 @@ Separate process, never on the agents' critical path:
     python -m pgmem.analyzer --post [--out DIR]   post-execution report of the campaign and of the memory
 
 Rules, by event (deterministic first; the LLM only to interpret: put a statement in a checkable form, propose an
-explanation, draft a procedure, advise a change of direction):
+explanation, draft a procedure, advise a change of direction; the campaign goal kept in the memory starts the
+prompts of explanations, procedures and advice, so that they serve it):
   result     redundant computation; data quality, and the impact analysis of an unreliable result (what rests on
              it, through IMPACT edges, up to PGMEM_ANALYSIS_DEPTH); verdicts of the statements in its scope
   failure    repeated failure of a molecule (cause confirmed by RDKit when it cannot read the SMILES); recurring
@@ -18,7 +19,8 @@ explanation, draft a procedure, advise a change of direction):
   knowledge  a statement resting on an unreliable result; its verdict, and what rests on it when it is contradicted
   proposals  proposals of molecules the team already measured or saw fail
   attempt    whether the guidance an agent received was applied and effective (APPLIED_IN edges); a procedure that
-             worked before and no longer does; two iterations without improvement
+             worked before and no longer does; an agent whose plan or conclusions aim against the campaign goal
+             (goal drift: the goal recalled to it); two iterations without improvement
   provenance redundant computations, LLM calls without tool calls, tasks in error (Flowcept records)
 
 Processing: the rules run as soon as an event arrives; the LLM's interpretation (explanations, procedures, claim
@@ -34,6 +36,7 @@ import argparse
 import json
 import logging
 import os
+import re
 import socket
 import time
 from collections import Counter
@@ -51,6 +54,37 @@ from .store import MemoryStore
 
 log = logging.getLogger("pgmem.analyzer")
 ME = "analysis-agent"
+
+# goal drift: a sentence in which the agent states that it aims (first person, an objective, a plan step) to move the
+# target quantity in the direction opposite to the goal; predictions ("X should lower the IE"), observations, tests of
+# a hypothesis and negations are not aims
+_AIM = (r"\b(?:I|we)\s+(?:will|shall|should|must|want|plan|aim|try|intend|need|are going)\w*(?:\s+to)?"
+        r"|\blet(?:'s|\s+us)\b|\b(?:goal|objective|aim|target|strategy|plan|task)\b\s*(?:is\s+to\b|:)"
+        r"|\b(?:aim\w*|seek\w*|trying|intend\w*)\s+(?:to|at)\b|\bin order to\b|\bso as to\b|\bfocus\w*\s+on\b"
+        r"|^[\s*#\-\d.)]*(?:find|search|look|propose|design|explore|prioriti[sz]e|target|select|choose|pick)\b")
+_AGAINST = {"maximize": r"minimi[sz]\w*|lower(?:ing)?|decreas(?:e|ing)|reduc(?:e|ing)|lowest|smallest|minimum|minimal",
+            "minimize": r"maximi[sz]\w*|rais(?:e|ing)|increas(?:e|ing)|boost(?:ing)?|enhanc(?:e|ing)|highest|largest|"
+                        r"maximum|maximal"}
+_NOT_AN_AIM = re.compile(r"\b(?:not|no|never|avoid\w*|without|instead|rather|prevent\w*|whether|if|hypothes\w*|"
+                         r"test\w*|check\w*|verify\w*|confirm\w*)\b|n't\b", re.I)
+
+
+def aims_against(text: str, direction: str) -> str | None:
+    """The first sentence of `text` that aims to move the target quantity against `direction`, or None."""
+    qty = "|".join(re.escape(t) if t.isupper() else f"(?i:{re.escape(t)})"
+                   for t in sorted(DOMAIN.quantity_terms, key=len, reverse=True))
+    aim = re.compile(rf"(?i:{_AIM})(?:\W+\w+){{0,6}}?\W+(?i:{_AGAINST[direction]})\W+"
+                     rf"(?:(?i:the|its|their|an?|overall)\W+)?(?:\w+\W+)?(?:{qty})\b")
+    for sentence in re.split(r"(?<=[.!?;])\s+|\n+", text or ""):
+        for m in aim.finditer(sentence):
+            if not _NOT_AN_AIM.search(m.group(0)):
+                return sentence.strip()[:300]
+    return None
+
+
+def _intent(a: Entry) -> str:
+    """What an agent wrote of its aims in an iteration: its plan and conclusions."""
+    return f"{a.data.get('plan_excerpt', '')}\n{a.data.get('conclusion_excerpt', '')}"
 
 
 def _as_text(v) -> str:
@@ -191,12 +225,14 @@ class Analyzer:
                 self.s.link(gid, node, "APPLIES", ME)
         return gid
 
-    def _llm_json(self, system: str, user: str) -> dict:
+    def _llm_json(self, system: str, user: str, with_goal: bool = True) -> dict:
+        """An LLM answer as JSON; an exception leaves the event or task pending. The campaign goal starts the prompt
+        of interpretations that must serve it (not of the extraction of a claim's form)."""
         if self.llm is None:
             return {}
         self.s.r.hincrby(self.stats_key, "llm_calls", 1)
-        campaign = self.s.campaign_text()            # the goal the advice and procedures must serve
-        return self.llm.ask_json(system, f"{campaign}\n\n{user}" if campaign else user)  # exception: event pending
+        goal = self.s.goal_text() if with_goal else ""
+        return self.llm.ask_json(system, f"{goal}\n\n{user}" if goal else user)
 
     def investigate(self, node: str, depth: int = 2, limit: int = 20) -> str:
         """A bounded subgraph around a node, as text for the LLM: each node reached, the relation and direction of
@@ -450,7 +486,7 @@ class Analyzer:
             return
         measured = ", ".join(sorted({e.key for e in self.s.all("M1")}))[:3000]
         claim = verification.normalize(self._llm_json(verification.extraction_prompt(),
-                                                      f"Statement: {k.text}\nMeasured molecules: {measured}"))
+                                                      f"Statement: {k.text}\nMeasured molecules: {measured}", with_goal=False))
         good, bad = verification.results(self.s)              # the results as they are now
         res = verification.check(claim, good, bad)
         verification.record(self.s, k.id, claim, res, "new statement")
@@ -507,7 +543,9 @@ class Analyzer:
                     e["props"].get("agent") == agent for e in self.g.outgoing(g.id, ["APPLIED_IN"])):
                 continue
             avoid, fclass, motif = set(g.check.get("avoid_keys", [])), g.check.get("failure_class"), g.check.get("motif")
-            if fclass == "invalid_smiles":       # the asked behaviour (valid SMILES) is itself the outcome
+            if g.check.get("goal"):              # the asked behaviour (pursue the goal) is itself the outcome
+                applied, effective = aims_against(_intent(a), g.check["goal"]) is None, None
+            elif fclass == "invalid_smiles":     # the asked behaviour (valid SMILES) is itself the outcome
                 applied, effective = all(DOMAIN.valid(k) for k in keys), None
             else:
                 carries = motif is not None and any(motif in DOMAIN.motifs(k) for k in keys)
@@ -543,9 +581,11 @@ class Analyzer:
                                   if k is not None), "workflow", "observation", [did, pid])
 
     def _on_attempt(self, p: dict) -> None:
-        """Two consecutive iterations of an agent without improving its best result: diagnosed now, advice from
-        the LLM later."""
+        """Goal drift; two consecutive iterations of an agent without improving its best result: diagnosed now,
+        advice from the LLM later."""
         agent = p.get("agent", "")
+        if (a := self.s.get(p.get("entry", ""))) is not None:
+            self._goal_drift(a)
         mine = sorted((e for e in self.s.by_key("M2", agent) if e.kind == "attempt"), key=lambda e: e.created_at)
         last = mine[-2:]
         if len(last) < 2 or any(e.data.get("improved") is not False for e in last) or self._fired(
@@ -555,6 +595,25 @@ class Analyzer:
                                 f"{agent}: two consecutive iterations without improvement", "workflow",
                                 "observation", [e.id for e in last])
         self._defer("advise", agent=agent, diagnosis=did, attempts=[e.id for e in last])
+
+    def _goal(self) -> tuple[str, str]:
+        g = self.s.goal()
+        return g.get("goal") or self.cfg.goal, g.get("direction") or self.cfg.direction
+
+    def _goal_drift(self, a: Entry) -> None:
+        """An agent whose plan or conclusions of an iteration aim against the campaign goal (e.g. to lower the
+        ionization energy when the goal is to raise it): a diagnosis, and the goal recalled to that agent (once until
+        it has received it)."""
+        goal, direction = self._goal()
+        said = aims_against(_intent(a), direction)
+        if said is None:
+            return
+        did, new = self._diagnose("goal_drift", f"{a.author}|{a.id}", f"{a.author} aims against the campaign goal "
+                                  f"({goal}; {direction}): \"{said}\"", "workflow", "observation", [a.id])
+        if new and not any(g.check.get("goal") for g in self.s.pending_guidance(a.author)):
+            self._guide(f"Your plan or conclusions say: \"{said}\". This goes against the campaign goal: {goal} "
+                        f"({direction} the target quantity). Choose your next molecules to {direction} it.",
+                        "workflow", "observation", [did], a.author, {"goal": direction})
 
     def _task_advise(self, p: dict) -> None:
         last = [e for e in (self.s.get(i) for i in p["attempts"]) if e is not None]
@@ -679,6 +738,7 @@ def main(argv: list[str] | None = None) -> None:
     if cfg.mode == "off":
         cfg.mode = "full"                        # the analysis agent is only started when it is wanted
     store = MemoryStore.connect(cfg.redis_host, cfg.redis_port, cfg.namespace)
+    store.set_goal(cfg.goal, cfg.direction)      # if the agents have not written it yet
     campaign = args.campaign or (latest_campaign(args.jsonl or cfg.jsonl_glob) if args.post else None)
     cfg.campaign_id = campaign
     kind = "none" if "provenance" not in cfg.analysis_sources else ("jsonl" if args.post else cfg.provenance_source)

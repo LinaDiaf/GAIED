@@ -8,6 +8,7 @@ another implementation of these few functions.
   entities_in(t)   the entities written in a text
   motifs(x)        the characteristic motifs of an entity (motif nodes of the graph; generic ones left out)
   similarity(a,b)  structural similarity in [0, 1]
+  quantity_terms   how texts name the target quantity (to read whether an agent aims to raise or lower it)
 
 The GAIED case study is chemistry: molecules (SMILES), functional groups (SMARTS), Tanimoto similarity.
 """
@@ -19,6 +20,8 @@ from . import chem
 class Chemistry:
     name = "chemistry"
     motif_vocabulary = chem.FEATURES               # motif name -> SMARTS
+    quantity_terms = ("ionization energy", "ionization energies", "ionization potential", "ionisation energy",
+                      "IE", "IEs", "IP")
 
     def canonical(self, smiles: str) -> str:
         return chem.canonical(smiles)

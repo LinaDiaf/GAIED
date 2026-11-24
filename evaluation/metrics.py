@@ -254,6 +254,7 @@ def run_metrics(run_dir: str) -> dict:
         m["confirmed_cause_correct"] = (sum(1 for d in confirmed if not chem.parses(d["key"])) / len(confirmed)
                                         if confirmed else None)
         m["procedure_ineffective_detected"] = bool(by_rule["procedure_no_longer_effective"])
+        m["goal_drift_detected"] = len(by_rule["goal_drift"])     # no ground truth: read with the quoted sentences
         for rule, v in acc.items():
             for k in ("truth", "detected", "precision", "recall"):
                 m[f"diag_{rule}_{k}"] = v[k]

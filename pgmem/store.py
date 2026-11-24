@@ -9,6 +9,7 @@ The shared persistent memory in Redis (already part of GAIED's deployment). One 
   verification       verdicts of statements and diagnoses, by entry id (pgmem/verification.py)
   emb                embeddings of entries, by entry id (semantic retrieval)
   g:{id}, gq         guidance and its index; gseen:{agent}: guidance already delivered to that agent
+  goal               the campaign goal and its direction, for the analysis agent (hash)
   events             stream of memory events, read by the analysis agent (consumer group, acknowledged)
 """
 from __future__ import annotations
@@ -17,6 +18,7 @@ import json
 from contextlib import contextmanager
 import redis
 
+from .config import DIRECTIONS
 from .domain import DOMAIN
 from .graph import GraphStore, node_type
 from .schema import CATEGORIES, Entry, Guidance, molecule_node, motif_node, now
@@ -26,8 +28,7 @@ def normalize(text: str) -> str:
     return " ".join((text or "").lower().split()).strip(" .")
 
 
-CAMPAIGN_FIELDS = ("goal", "direction", "method", "parameters", "seeds", "n_agents", "max_iterations", "started",
-                   "campaign_id")
+GOAL_FIELDS = ("goal", "direction")
 
 
 class MemoryStore:
@@ -55,36 +56,29 @@ class MemoryStore:
             except redis.exceptions.LockError:
                 pass
 
-    # ------------------------------------------------------------------ campaign
-    def set_campaign(self, goal: dict, run: dict) -> None:
-        """The campaign this memory belongs to (one record per namespace; M1-M4 belong to it through the namespace).
-        Goal fields are written only if absent: the first agent, or a human (python -m pgmem.campaign set), decides
-        them. Run fields are replaced when a new Flowcept campaign uses this memory."""
-        key = self._k("campaign")
-        for f, v in goal.items():
-            if v not in (None, ""):
-                self.r.hsetnx(key, f, str(v))
-        run = {f: str(v) for f, v in run.items() if v not in (None, "")}
-        new_run = run.get("campaign_id") and self.r.hget(key, "campaign_id") != run["campaign_id"]
-        for f, v in run.items():
-            (self.r.hset if new_run else self.r.hsetnx)(key, f, v)
+    # ------------------------------------------------------------------ goal
+    def set_goal(self, goal: str, direction: str) -> None:
+        """The campaign goal (one per namespace), written only if absent: the first process that starts, or a human
+        (python -m pgmem.goal set), decides it."""
+        for f, v in (("goal", goal), ("direction", direction)):
+            if v:
+                self.r.hsetnx(self._k("goal"), f, v)
 
-    def update_campaign(self, field: str, value: str | None) -> None:
-        """A human edit of the campaign record (None removes the field)."""
-        if value is None:
-            self.r.hdel(self._k("campaign"), field)
-        else:
-            self.r.hset(self._k("campaign"), field, value)
+    def update_goal(self, field: str, value: str) -> None:
+        """A human edit of the goal."""
+        if field not in GOAL_FIELDS:
+            raise ValueError(f"goal field must be one of {GOAL_FIELDS}")
+        if field == "direction" and value not in DIRECTIONS:
+            raise ValueError(f"direction must be one of {DIRECTIONS}")
+        self.r.hset(self._k("goal"), field, value)
 
-    def campaign(self) -> dict:
-        return self.r.hgetall(self._k("campaign"))
+    def goal(self) -> dict:
+        return self.r.hgetall(self._k("goal"))
 
-    def campaign_text(self) -> str:
-        """The campaign as a short prompt section, the goal first ("" if no campaign was recorded)."""
-        c = self.campaign()
-        keys = sorted(c, key=lambda f: CAMPAIGN_FIELDS.index(f) if f in CAMPAIGN_FIELDS else len(CAMPAIGN_FIELDS))
-        return ("CAMPAIGN (goal and settings shared by the whole team)\n" + "\n".join(f"- {f}: {c[f]}" for f in keys)
-                if c else "")
+    def goal_text(self) -> str:
+        """The goal as a line for the analysis agent's prompts ("" if none is recorded)."""
+        g = self.goal()
+        return f"Campaign goal: {g['goal']} ({g.get('direction', 'maximize')} the target quantity)" if g.get("goal") else ""
 
     # ------------------------------------------------------------------ nodes
     def exists(self, node: str) -> bool:
@@ -224,7 +218,7 @@ class MemoryStore:
     # ------------------------------------------------------------------ maintenance
     def export(self) -> dict:
         return {"namespace": self.ns,
-                "campaign": self.campaign(),
+                "goal": self.goal(),
                 "entries": {c: [e.to_dict() for e in self.all(c)] for c in CATEGORIES},
                 "edges": self.graph.all(),
                 "guidance": [g.to_dict() for g in self.all_guidance()],

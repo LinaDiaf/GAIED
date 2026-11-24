@@ -108,13 +108,15 @@ def result(entity: str, quantity: str, value: float, unit: str, conditions: dict
 
 def attempt(text: str, author: str, iteration: int, proposed: list[str], proposed_at: float | None,
             reused: list[str], improved: bool | None, best_before: float | None, best_after: float | None,
-            plan_excerpt: str = "", prov_refs: list[dict] | None = None, campaign_id: str | None = None) -> Entry:
-    """M2: one iteration of an agent. Its results and failures point to it (PART_OF edges)."""
+            plan_excerpt: str = "", conclusion_excerpt: str = "", prov_refs: list[dict] | None = None,
+            campaign_id: str | None = None) -> Entry:
+    """M2: one iteration of an agent. Its results and failures point to it (PART_OF edges). The excerpts of its plan
+    and conclusions are what the analysis agent reads to check that the agent still pursues the campaign goal."""
     return Entry("M2", "attempt", text, key=author, author=author, campaign_id=campaign_id,
                  prov_refs=prov_refs or [],
                  data={"iteration": iteration, "proposed": proposed, "proposed_at": proposed_at, "reused": reused,
                        "improved": improved, "best_before": best_before, "best_after": best_after,
-                       "plan_excerpt": plan_excerpt})
+                       "plan_excerpt": plan_excerpt, "conclusion_excerpt": conclusion_excerpt})
 
 
 def failure(entity: str, failure_class: str, error: str, author: str, iteration: int, spelling: str,

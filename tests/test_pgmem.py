@@ -549,26 +549,14 @@ def test_fault_selection_is_deterministic_and_the_scenarios_hide_the_injection()
             os.environ.update(old)
 
 
-def test_campaign_goal_is_written_once_and_reaches_the_agents_and_the_analysis_agent():
-    from pgmem.agent_client import record_campaign
+def test_goal_is_written_once_and_starts_the_analysis_prompts_but_not_the_agents():
     cfg, store, _ = setup()
-    old = dict(os.environ)
-    os.environ.update(SEEDS="CNC(N)=O,CCO", MAX_ITERATIONS="8", PGMEM_GOAL="raise the ionization energy")
-    try:
-        store.update_campaign("goal", "find molecules with the highest ionization energy")   # set by a human first
-        record_campaign(store, cfg, COND)
-        os.environ["PGMEM_GOAL"] = "another goal"                     # a later agent does not replace it
-        record_campaign(store, cfg, COND)
-    finally:
-        os.environ.clear()
-        os.environ.update(old)
-    c = store.campaign()
-    assert c["goal"] == "find molecules with the highest ionization energy" and c["direction"] == "maximize"
-    assert c["method"] == "GFN2-xTB" and '"accuracy": 0.05' in c["parameters"] and c["n_agents"] == "2"
-    assert c["campaign_id"] == "c1" and store.campaign_text().splitlines()[1].startswith("- goal:")
+    store.update_goal("goal", "raise the ionization energy")              # set by a human before the campaign
+    store.set_goal(cfg.goal, cfg.direction)                               # the agents do not replace it
+    assert store.goal() == {"goal": "raise the ionization energy", "direction": "maximize"}
     a = client(store, cfg, "CCO#1")
     a.record_result("CCO", 15.0, OK, "t1", "w1", "c1")
-    assert "- goal: find molecules" in a.context("plan", "CCO")
+    assert "raise the ionization energy" not in a.context("plan", "CCO")   # agents keep GAIED's own prompt
 
     class Spy:
         users: list = []
@@ -578,10 +566,45 @@ def test_campaign_goal_is_written_once_and_reaches_the_agents_and_the_analysis_a
             return {}
     an = Analyzer(store, cfg, llm=Spy())
     an._llm_json("system", "Recent iterations: none")
-    assert Spy.users[0].startswith("CAMPAIGN") and "Recent iterations" in Spy.users[0]
-    cfg2 = Config(**{**cfg.__dict__, "campaign_id": "c2"})          # the same memory used by a new campaign
-    record_campaign(store, cfg2, COND)
-    assert store.campaign()["campaign_id"] == "c2" and store.campaign()["goal"].startswith("find molecules")
+    an._llm_json("system", "Statement: x", with_goal=False)              # the extraction of a claim's form
+    assert Spy.users[0].startswith("Campaign goal: raise the ionization energy (maximize")
+    assert Spy.users[1] == "Statement: x"
+
+
+def test_aims_against_the_goal_are_told_from_predictions_observations_and_tests():
+    from pgmem.analyzer import aims_against
+    drift = ["Our goal is to minimize the ionization energy of the candidates.",
+             "Next, I will propose molecules with lower IE to explore the trend.",
+             "Plan: find the molecule with the lowest ionization energy.",
+             "- Propose analogues with a lower ionization energy",
+             "We need to reduce the IE further."]
+    fine = ["Fluorine tends to lower the ionization energy.", "CCO had the lowest ionization energy so far.",
+            "We should avoid groups that lower the IE.", "We will lower the HOMO energy to raise the IE.",
+            "Look for molecules with high ionization energy.", "Our goal is not to reduce the ionization energy.",
+            "Replacing F by Me should indeed lower the IE.", "Will it lower IE relative to F?",
+            "*Objective:* Test the hypothesis that heavier halogens reduce IE.", "I will maximize the IE."]
+    assert all(aims_against(t, "maximize") for t in drift)
+    assert not any(aims_against(t, "maximize") for t in fine)
+    assert aims_against("I will maximize the IE.", "minimize")
+
+
+def test_goal_drift_is_diagnosed_and_the_goal_recalled_until_the_agent_follows_it():
+    cfg, s, an = setup()
+    a1 = client(s, cfg, "a1")
+    a1.record_proposals(["CCO"])
+    a1.record_conclusion("Conclusions.", "Plan: find the molecule with the lowest ionization energy.", None)
+    a1.record_proposals(["CCC"])
+    a1.record_conclusion("Conclusions.", "Plan: lower the IE again.", None)       # not yet received: no new one
+    drain(an)
+    assert len(diagnoses(s, "goal_drift")) == 2
+    gs = [g for g in s.all_guidance() if g.check.get("goal")]
+    assert len(gs) == 1 and gs[0].target == "a1" and "lowest ionization energy" in gs[0].message
+    a1.context("plan", "CCO")                                                    # delivered
+    a1.record_proposals(["CCCC"])
+    a1.record_conclusion("Conclusions.", "Plan: propose molecules with a higher ionization energy.", None)
+    drain(an)
+    judged = [e["props"] for e in s.graph.outgoing(gs[0].id, ["APPLIED_IN"])]
+    assert len(judged) == 1 and judged[0]["applied"] is True and judged[0]["effective"] is None
 
 
 TESTS = [v for k, v in sorted(globals().items()) if k.startswith("test_")]

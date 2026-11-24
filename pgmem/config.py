@@ -5,6 +5,10 @@ import os
 from dataclasses import dataclass
 
 MODES = ("off", "basic", "structured", "full")
+DIRECTIONS = ("maximize", "minimize")
+# the goal GAIED gives its agents in their own prompt ("Look for molecules with high ionization energy"); the memory
+# keeps the same goal for the analysis agent, which checks that the agents still pursue it
+DEFAULT_GOAL = "find molecules with high ionization energy"
 CHANNELS = ("bm25", "semantic", "chem", "graph")
 SOURCES = ("memory", "provenance")
 
@@ -32,6 +36,8 @@ class Config:
     redis_host: str = "localhost"
     redis_port: int = 6379
     campaign_id: str | None = None
+    goal: str = DEFAULT_GOAL                # the campaign goal, kept in the memory for the analysis agent
+    direction: str = "maximize"             # maximize | minimize: the direction of the goal quantity
     retrieval_limit: int = 5                # entries per section of a prompt (prompt size, not a scientific rule)
     channels: tuple = CHANNELS              # retrieval channels fused by RRF (pgmem/retrieval.py)
     embed_model: str = "nomic-embed-text"   # Ollama embedding model of the semantic channel
@@ -63,12 +69,17 @@ class Config:
         mode = os.environ.get("PGMEM_MODE", "off").strip().lower()
         if mode not in MODES:
             raise ValueError(f"PGMEM_MODE must be one of {MODES}, got {mode!r}")
+        direction = os.environ.get("PGMEM_DIRECTION", "maximize").strip().lower()
+        if direction not in DIRECTIONS:
+            raise ValueError(f"PGMEM_DIRECTION must be one of {DIRECTIONS}, got {direction!r}")
         return cls(
             mode=mode,
             namespace=os.environ.get("PGMEM_NAMESPACE", "default"),
             redis_host=os.environ.get("REDIS_HOST", "localhost"),
             redis_port=int(os.environ.get("REDIS_PORT", "6379")),
             campaign_id=os.environ.get("FLOWCEPT_CAMPAIGN_ID"),
+            goal=os.environ.get("PGMEM_GOAL", DEFAULT_GOAL),
+            direction=direction,
             retrieval_limit=int(os.environ.get("PGMEM_RETRIEVAL_LIMIT", "5")),
             channels=_list("PGMEM_CHANNELS", CHANNELS, CHANNELS),
             embed_model=os.environ.get("PGMEM_EMBED_MODEL", "nomic-embed-text"),

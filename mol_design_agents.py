@@ -446,7 +446,7 @@ class XTBSimulationAgent(Agent):
         self.memory = None  # [pgmem] shared memory (PGMEM_MODE); never required for the workflow to run
         try:
             from pgmem.agent_client import from_env as _pgm_from_env
-            self.memory = _pgm_from_env(self.agent_name, xtb_conditions(self.config))  # [pgmem] + campaign
+            self.memory = _pgm_from_env(self.agent_name)
         except Exception as exc:
             logger.warning('Shared memory unavailable, continuing without it: %s', exc)
 

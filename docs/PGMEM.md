@@ -38,7 +38,7 @@ edge. Provenance stays in Flowcept: the memory refers to it, it never copies it.
 | `pgmem/provenance.py` | adapter to Flowcept (JSONL files, online channel) |
 | `pgmem/faults.py` | fault injection for the controlled evaluation |
 | `pgmem/show.py`, `pgmem/collect.py` | print a memory; zip a namespace's memory, events, provenance and reports |
-| `pgmem/campaign.py` | read or edit the campaign record (goal and settings) |
+| `pgmem/goal.py` | read or set the campaign goal kept in the memory |
 
 ## Nodes
 
@@ -99,7 +99,7 @@ verification                        verdict records, by entry id
 emb                                 embeddings of entries
 g:{id}, gq, gseen:{agent}           guidance, its index, what each agent has received
 claim:{molecule}                    per-molecule lock
-campaign                            the campaign record: goal, direction, method, parameters, seeds, run (hash)
+goal                                the campaign goal and its direction (hash), for the analysis agent
 events                              memory events (Redis Stream, consumer group of the analysis agent)
 ```
 
@@ -180,20 +180,27 @@ gave): scheduled sections at `plan`, `critique` and `update`; and the `query_mem
 | `simulate` | existing result reused, or the per-molecule lock; result (M1 ABOUT its molecule) or failure (M2) |
 | `conclude` | a `KNOWLEDGE` block asked for: statements (M3) with their status, the molecules they cite (evidence edges of origin `llm`) and what they explain; the iteration's attempt (M2), which its results and failures are `PART_OF` |
 
-### Campaign
+### Goal
 
-Each memory holds one campaign record (`campaign`), to which all its entries belong through the namespace:
+Each memory keeps the campaign goal (`goal`: the goal and its direction, `maximize` or `minimize`), written by the
+first agent or analysis agent that starts when the memory has none (`PGMEM_GOAL`, `PGMEM_DIRECTION`), or set by a
+human before the campaign (`python -m pgmem.goal set goal "..."`). It is for the analysis agent:
 
-| Field | Written | Value |
-|---|---|---|
-| `goal`, `direction` | if absent | `PGMEM_GOAL`, `PGMEM_DIRECTION`, or a human with `python -m pgmem.campaign set` |
-| `method`, `parameters` | per run | the xTB conditions of the agents (`xtb_conditions`) |
-| `seeds`, `n_agents`, `max_iterations`, `started`, `campaign_id` | per run | the launch settings and the Flowcept campaign |
+- it starts the prompts of its explanations, procedures and advice (`EXPLAIN_FAILURES`, `DRAFT_PROCEDURE`,
+  `SUGGEST_DIRECTION`), so that they serve the goal; not the extraction of a claim's form, which does not need it;
+- it is what the goal-drift rule checks the agents against (Analysis agent, below).
 
-The first agent writes it at start (`from_env`); run fields are replaced when another Flowcept campaign uses the same
-memory. It is the first section of every memory context (`plan`, `tool_calling`, `critique`, `update`) and starts
-the user message of every LLM call of the analysis agent (`SUGGEST_DIRECTION`, `DRAFT_PROCEDURE`,
-`EXPLAIN_FAILURES`), so that advice and procedures serve the campaign's goal.
+The agents do not receive it from the memory: they keep receiving their goal from GAIED's own prompt ("Look for
+molecules with high ionization energy"), in every condition, so the memory conditions add no information about the
+task that `off` lacks. `PGMEM_GOAL` must therefore describe the same goal as that prompt. Each attempt (M2) keeps
+excerpts of the iteration's plan and conclusions (1500 characters each), which the rule reads.
+
+Goal drift is read without the LLM: a sentence in which the agent states an aim (first person, "goal:", "plan:", "in
+order to", a plan step) to move the target quantity against the goal's direction ("we will propose molecules with
+lower IE"). Predictions ("replacing F by Me should lower the IE"), observations ("CCO had the lowest IE"), tests of a
+hypothesis and negations are not aims; the quantity's names come from the domain interface (`quantity_terms`). On
+the LLM outputs of the two Qwen pilots (about 1,000 records) it fires twice, on plans whose objective is "the true
+global minimum IE". Its limit: an agent that drifts without writing it is not detected.
 
 The agents never touch the graph: the code creates the nodes and edges. The lock: before computing a molecule an
 agent takes `claim:{molecule}` (Redis `SET NX`, expiring after `PGMEM_CLAIM_TTL_S`); another agent asking for the
@@ -218,6 +225,7 @@ procedure or advise a change of direction). It never rewrites an entry.
 | proposals | repeated proposals | | diagnosis; guidance to the agent |
 | attempt | guidance judgement | the attempt's `PART_OF` results and failures | `APPLIED_IN` edge: applied (none of the molecules or motif warned against proposed), effective (none recomputed, no new failure of the class) |
 | | procedure no longer effective | the procedure's applications; its `JUSTIFIED_BY` statements | diagnosis; guidance to every agent naming the statements it rests on |
+| | goal drift | the attempt's plan and conclusions | diagnosis quoting the sentence; guidance recalling the goal to that agent, unless it has one not yet received; judged applied when its next attempt no longer aims against the goal |
 | | no improvement in two iterations | | diagnosis; advice to the agent |
 | provenance | redundant computation, LLM call without tool calls, task in error | Flowcept records | diagnoses |
 
@@ -270,7 +278,7 @@ process: the pool worker is a fork whose Flowcept buffer is never flushed), `[ga
 |---|---|---|
 | `PGMEM_MODE` | `off` | `off`, `basic`, `structured`, `full` |
 | `PGMEM_NAMESPACE` | `default` | memory namespace (a new one per experiment) |
-| `PGMEM_GOAL`, `PGMEM_DIRECTION` | `find molecules with the highest ionization energy (eV)`, `maximize` | the campaign's goal, written in the memory if it has none |
+| `PGMEM_GOAL`, `PGMEM_DIRECTION` | `find molecules with high ionization energy`, `maximize` | the campaign goal, written in the memory if it has none (the same goal as GAIED's prompt) |
 | `REDIS_HOST`, `REDIS_PORT` | `localhost`, `6379` | Redis server |
 | `PGMEM_RETRIEVAL_LIMIT` | `5` | entries per section of a prompt |
 | `PGMEM_CHANNELS` | `bm25,semantic,chem,graph` | retrieval channels (ablations) |
@@ -302,7 +310,7 @@ docker compose --profile analysis run -d --rm --no-deps --name pgmem-analyzer -e
 docker compose run --rm --no-deps -e PGMEM_MODE=full -e PGMEM_NAMESPACE=run1 -e "SEEDS=CNC(N)=O,CNC(N)=O" -e MAX_ITERATIONS=3 gaied
 # memory, post-execution report, shareable zip
 docker compose run --rm --no-deps -e PGMEM_NAMESPACE=run1 gaied python -m pgmem.show
-docker compose run --rm --no-deps -e PGMEM_NAMESPACE=run1 gaied python -m pgmem.campaign   # or: set goal "..."
+docker compose run --rm --no-deps -e PGMEM_NAMESPACE=run1 gaied python -m pgmem.goal   # or: set goal "..."
 docker compose run --rm --no-deps -e PGMEM_NAMESPACE=run1 analyzer python -m pgmem.analyzer --post
 docker stop pgmem-analyzer
 docker compose run --rm --no-deps gaied python -m pgmem.collect --namespace run1
