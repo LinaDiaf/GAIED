@@ -599,6 +599,21 @@ def _iteration(c, smiles_values, plan="Plan: continue."):
     c.record_conclusion("Conclusions.", plan, None)
 
 
+def test_best_and_improved_of_an_attempt_follow_the_goal():
+    for fields, best, improved in (({"direction": "minimize"}, 10.0, [True, True, False]),
+                                   ({"direction": "target", "target": "11,12"}, 11.5, [True, True, False]),
+                                   ({"quantity": "homo_energy"}, None, [None, None, None])):   # not this quantity
+        cfg, s, _ = setup()
+        for f, v in fields.items():
+            s.update_goal(f, v)
+        s.set_goal(cfg.goal)
+        a1 = client(s, cfg, "a1")
+        for sm, v in (("CCO", 13.0), ("CCCO", 11.5) if "target" in fields else ("CCCO", 10.0), ("CCCCO", 14.0)):
+            _iteration(a1, [(sm, v)])
+        att = sorted((e for e in s.all("M2") if e.kind == "attempt"), key=lambda e: e.created_at)
+        assert a1.best == best and [e.data["improved"] for e in att] == improved, fields
+
+
 def test_results_moving_away_from_the_goal_are_observed_in_its_direction():
     for direction, expected in (("maximize", 1), ("minimize", 0)):
         cfg, s, an = setup()

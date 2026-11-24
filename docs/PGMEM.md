@@ -188,8 +188,12 @@ against: `quantity`, `direction` (`maximize`, `minimize` or `target`) and `targe
 field is written by the first agent or analysis agent that starts when the memory does not have it (`PGMEM_GOAL`,
 `PGMEM_GOAL_QUANTITY`, `PGMEM_DIRECTION`, `PGMEM_TARGET`), or set by a human before the campaign
 (`python -m pgmem.goal set text "..."`). The score of a result is its value, its opposite, or minus its distance to
-the target interval; an agent's best result and whether an iteration improved it, the best results shown to the
-agents and the advice prompt use it, so nothing assumes that higher is better.
+the target interval. It decides what "best" means everywhere, so nothing assumes that higher is better: the
+attempt's `best_before`, `best_after` and `improved` (M2), hence the no-improvement rule and the attempts shown to
+the agents; the best results shown to the agents and given to the advice prompt; the iteration scores of the
+moving-away rule and of the judgement of goal reminders; the best value of the evaluation metrics. Without a
+measurable goal on the measured quantity there is no "better": `improved` stays empty and those rules do not fire.
+The goal is fixed for a campaign (agents read it when they start): set it before the campaign, not during it.
 
 The goal is for the analysis agent:
 
