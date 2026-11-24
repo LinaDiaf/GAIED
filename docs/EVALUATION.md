@@ -35,7 +35,7 @@ the patterns. Each computation and each fault is logged as ground truth.
 
 | Scenario | Seeds | Iterations | Injected | Situations |
 |---|---|---|---|---|
-| `motif_failures` | different | 5 | molecules with a nitrile (`C#N`) fail; once the agents have completed 4 iterations in total, molecules with a CF3 group fail instead | repeated technical failures, learning from failures, procedures per motif, a procedure that becomes ineffective |
+| `motif_failures` | different | 5 | molecules with a CF3 group fail; once the agents have completed 4 iterations in total, molecules with a nitro group fail instead (the two most proposed motifs that neither seed carries, in the probe with the paper's model: CF3 31%, nitro 14% of valid proposals) | repeated technical failures, learning from failures, procedures per motif, a procedure that becomes ineffective |
 | `invalid_artifacts` | different | 3 | 30 % of the optimizations are cut after 3 steps (not converged) | invalid or incomplete artifacts and what rests on them |
 | `corrupted_results` | different | 3 | 30 % of the values are shifted by -3 eV | maintenance of knowledge built on corrupted results |
 | `redundant_computations` | the same seed for both agents | 3 | nothing | redundant computations |

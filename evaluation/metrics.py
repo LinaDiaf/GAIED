@@ -473,12 +473,12 @@ KNOWLEDGE_COLUMNS = [
 ]
 ADAPTATION_COLUMNS = [
     ("switch reached", "phase_switch_reached"),
-    ("phase 1 nitrile share, 1st / 2nd half", ("phase1_failing_motif_share_first_half",
+    ("phase 1 failing motif share, 1st / 2nd half", ("phase1_failing_motif_share_first_half",
                                                 "phase1_failing_motif_share_second_half")),
     ("phase 1 failures", "phase1_failures"),
-    ("phase 2 CF3 share, 1st / 2nd half", ("phase2_failing_motif_share_first_half",
+    ("phase 2 failing motif share, 1st / 2nd half", ("phase2_failing_motif_share_first_half",
                                             "phase2_failing_motif_share_second_half")),
-    ("phase 2 failures", "phase2_failures"), ("phase 2 nitrile share", "phase2_old_motif_share"),
+    ("phase 2 failures", "phase2_failures"), ("phase 2 share of the phase 1 motif", "phase2_old_motif_share"),
     ("computations to detect the change", "computations_to_detect_change"),
     ("old guidance delivered after the change", "old_failure_guidance_delivered_after_switch"),
 ]

@@ -4,9 +4,9 @@ Evaluation design: scenarios, conditions and series (which runs to execute).
 Four controlled scenarios cover the specification's situations (inefficient exploration and redundant computations
 are measured in every run):
 
-  motif_failures          repeated technical failures, then a change of context: molecules with a nitrile fail
-                          until the agents have completed SWITCH_AFTER_ITERATIONS iterations in total (the same
-                          decision budget in every condition), then those with a CF3 group fail instead (a molecule
+  motif_failures          repeated technical failures, then a change of context: molecules with a CF3 group
+                          fail until the agents have completed SWITCH_AFTER_ITERATIONS iterations in total (the same
+                          decision budget in every condition), then those with a nitro group fail instead (a molecule
                           with both fails in both phases). Learning from failures, procedures for a motif, and a
                           procedure that becomes ineffective.
   invalid_artifacts       30 % of the optimizations are cut after 3 steps (not converged); what rests on them
@@ -24,20 +24,24 @@ a repetition uses the same LLM sampling seed (paired runs).
 """
 from __future__ import annotations
 
+from pgmem.chem import FEATURES
+
 DIFFERENT_SEEDS = "CNC(N)=O,CC1=C(O)N=C(O)N1"     # GAIED's default seeds: two agents exploring different regions
 SAME_SEEDS = "CNC(N)=O,CNC(N)=O"                  # two agents starting from the same molecule
 SWITCH_AFTER_ITERATIONS = 4                       # iterations of all agents before the failing motif changes
 DESIGN = "pgmem-v3.1"        # written in every run: runs of another design are never mixed into a series
 
-NITRILE, CF3 = "C#N", "[CX4](F)(F)F"
+# the failing motifs, chosen from the probe with the paper's model (evaluation.motif_frequency): the two most proposed
+# motifs that neither seed carries (amide and heteroaromatic nitrogen are the seeds' own motifs)
+CF3, NITRO = FEATURES["trifluoromethyl"], FEATURES["nitro"]
 
 SCENARIOS: dict[str, dict] = {
     "motif_failures": {
         "seeds": DIFFERENT_SEEDS, "max_iterations": 5,
-        "faults": {"phase": 0, "fail": {"smarts": NITRILE, "message": "SCF not converged"}},
+        "faults": {"phase": 0, "fail": {"smarts": CF3, "message": "SCF not converged"}},
         "switch": {"after_iterations": SWITCH_AFTER_ITERATIONS,
-                   "faults": {"phase": 1, "fail": {"smarts": CF3, "message": "SCF not converged"}}},
-        "motifs": [NITRILE, CF3],
+                   "faults": {"phase": 1, "fail": {"smarts": NITRO, "message": "SCF not converged"}}},
+        "motifs": [CF3, NITRO],
     },
     "invalid_artifacts": {
         "seeds": DIFFERENT_SEEDS,
