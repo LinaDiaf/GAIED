@@ -15,8 +15,9 @@ import re
 
 EXPLAIN_FAILURES = """You analyze failed simulations of a molecular design workflow.
 Given molecules whose computation failed with the same error class (and the motif they share, if any), propose a
-candidate explanation of why they fail and one short piece of advice for the agents. You only propose; nothing you say
-is taken as a confirmed cause.
+candidate explanation of why they fail and one short piece of advice for the agents. The agents only choose which
+molecules to compute: they cannot change the simulation method or its settings, so the advice is about the molecules
+to propose or avoid. You only propose; nothing you say is taken as a confirmed cause.
 Answer with ONLY a JSON object: {"explanation": "...", "advice": "..."}"""
 
 SUGGEST_DIRECTION = """You advise a computational chemistry agent whose recent iterations did not improve its best
@@ -24,7 +25,9 @@ result. Using the team's results, failures and knowledge given below, suggest on
 Answer with ONLY a JSON object: {"advice": "..."}"""
 
 DRAFT_PROCEDURE = """From several failed computations of a molecular design workflow that show the same pattern,
-write one reusable procedure for future agents. Be specific; state its limits. The team's knowledge related to the
+write one reusable procedure for future agents. The agents only choose which molecules to compute (they cannot change
+the simulation method or its settings), so the actions are about the molecules to propose or avoid. Be specific;
+state its limits. The team's knowledge related to the
 pattern is listed with ids: give the ids of the statements that justify the procedure, if any.
 Answer with ONLY a JSON object: {"text": "...", "trigger": "...", "preconditions": "...", "actions": "...",
 "expected_outcome": "...", "limitations": "...", "justified_by": ["<statement id>", ...]}"""

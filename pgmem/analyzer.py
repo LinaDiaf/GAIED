@@ -498,9 +498,10 @@ class Analyzer:
                                   f"{agent} proposed {len(known)} already measured and {len(failed)} already failed "
                                   f"molecule(s): {', '.join((known + failed)[:8])}", "workflow", "observation", based)
         if new:
-            self._guide(f"You proposed molecules the team has already measured ({', '.join(known[:5]) or '-'}) "
-                        f"or seen fail ({', '.join(failed[:5]) or '-'}). Check the team's results before proposing.",
-                        "workflow", "observation", [did], agent, {"avoid_keys": known + failed})
+            seen = [f"already measured: {', '.join(dict.fromkeys(known))}"] if known else []
+            seen += [f"already seen to fail: {', '.join(dict.fromkeys(failed))}"] if failed else []
+            self._guide(f"You proposed molecules the team knows ({'; '.join(seen)}). Check the team's results "
+                        f"before proposing.", "workflow", "observation", [did], agent, {"avoid_keys": known + failed})
 
     def _judge_guidance(self, p: dict) -> None:
         """Was the guidance delivered to this agent applied in its next proposals (none of the molecules or motif it
