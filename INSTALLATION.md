@@ -205,7 +205,6 @@ et affiche chaque appel au modèle, chaque simulation xTB, et le nombre de **cal
 | `mol_design_agents.py` | l'agent (`XTBSimulationAgent`) et sa boucle LangGraph : plan → tool_calling → simulate → conclude → critique → update |
 | `run-07.py` | lance les agents et l'orchestration de la campagne |
 | `docker/` | toute la configuration Docker ; `local_llm.py` branche le modèle local ou la clé API |
-| `CLAUDE.md` | description détaillée du projet (aussi lue par Claude Code) |
 
 Les modifications faites au code d'origine d'Amal sont repérables par les commentaires
 `[gaied-docker ...]` (configuration) et `[provenance-fix]` (provenance des calculs xTB).
